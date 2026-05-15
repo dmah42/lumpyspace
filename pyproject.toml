@@ -1,0 +1,29 @@
+[project]
+name = "numrel"
+version = "0.1.0"
+description = "Inhomogeneous Cosmology PINN using JAX"
+dependencies = [
+  "jax[cuda12]",
+  "equinox",
+  "optax",
+  "diffrax",
+  "astropy",
+  "numpy",
+]
+
+[tool.ruff]
+line-length = 80
+indent-width = 2
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "lf"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
