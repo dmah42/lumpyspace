@@ -1,5 +1,5 @@
 [project]
-name = "numrel"
+name = "lumpyspace"
 version = "0.1.0"
 description = "Inhomogeneous Cosmology PINN using JAX"
 dependencies = [

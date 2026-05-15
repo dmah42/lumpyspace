@@ -37,7 +37,7 @@ To ensure maintainability and consistency, the following standards are enforced:
 ...
 
 ```text
-numrel/
+lumpyspace/
 ├── docs/               # Technical Design & References
 ├── src/
 │   ├── core/           # Metric wrapper, Tensor calculus (Riemann, Ricci)
@@ -160,3 +160,4 @@ $$\mathcal{L}_{Total} = w_P \mathcal{L}_{Physics} + w_D \mathcal{L}_{Data} + w_{
 *   **Unit Tests:** Verify $g_{\mu\nu}$ symmetry and signature.
 *   **Symmetry Tests:** Check if the learned metric respects the requested Bianchi Type I spatial symmetries.
 *   **Performance:** Benchmark training speed. The RTX 5070 must handle $\sim 10^5$ collocation points per minute.
+ minute.
