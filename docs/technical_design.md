@@ -1,109 +1,157 @@
-# Technical Design Document: Physics-Informed Neural Network (PINN) for Anisotropic Cosmology
+# Comprehensive Technical Design: Inhomogeneous Cosmology PINN
 
 ## 1. Executive Summary
+This document defines the architecture, physical foundation, and implementation strategy for a Physics-Informed Neural Network (PINN) designed to reconstruct the spacetime metric $g_{\mu\nu}$ of the universe.
 
-This document outlines the architecture, mathematical foundation, and implementation strategy for a Physics-Informed Neural Network (PINN) designed to reconstruct the spacetime metric $g_{\mu\nu}$ of the universe. 
+**The Goal:** To model a universe that relaxes the strict homogeneity and isotropy assumptions of the FLRW metric, using **Bianchi Class I** models as a baseline. We aim to determine if anisotropic expansion and local backreaction can resolve the Hubble Tension and account for Dark Energy effects without a cosmological constant ($\Lambda$).
 
-**The Goal:** To model a universe that relaxes the strict homogeneity and isotropy assumptions of the Friedmann-Lemaître-Robertson-Walker (FLRW) metric. We aim to show that by allowing for **anisotropy (shear)** and **local inhomogeneity**, we can fit cutting-edge cosmological data (like the late-time $H_0$ measurements from Supernovae) without relying on ad-hoc "fudge factors" like Dark Energy ($\Lambda$).
-
-**The Approach:** We will utilize a PINN where the neural network acts as a universal function approximator for the metric components $g_{\mu\nu}(t, x, y, z)$. The network is trained not just to fit observational data, but is constrained by the Einstein Field Equations (EFE) serving as a physical loss function. We will specifically lean into **Bianchi Class I/VII** models as our architectural baseline.
-
-**Hardware Target:** Local execution on a single NVIDIA RTX 5070 GPU.
+**The Approach:** A JAX-based PINN acts as a universal function approximator for $g_{\mu\nu}(t, x, y, z)$, constrained by the Einstein Field Equations (EFE) and grounded in Supernovae distance data.
 
 ---
 
-## 2. Theoretical Foundation & The "Why"
+## 2. Theoretical Foundation (The "Why")
 
-### 2.1 Why Abandon FLRW?
-The FLRW metric assumes the universe is a perfectly smooth fluid. This "Mean Field" approximation fails to account for the non-linear clustering of matter (the Cosmic Web). This failure manifests as the **Hubble Tension** (early vs. late universe expansion rates disagreeing at $5\sigma$) and anomalies in the CMB (e.g., the "Axis of Evil").
+### 2.1 The Breakdown of FLRW
+The Friedmann-Lemaître-Robertson-Walker (FLRW) metric assumes a "Mean Field" universe. By averaging out structure before solving Einstein's equations, we ignore the non-linear "backreaction" terms ($\mathcal{Q}_D$). In General Relativity, **averaging and evolution do not commute**: $G_{\mu\nu}(\langle g \rangle) \neq \langle G_{\mu\nu}(g) \rangle$.
 
-### 2.2 The Target Metric: Perturbed Bianchi Class I
-Instead of FLRW, the network will learn a metric that is fundamentally anisotropic. We select **Bianchi Type I** as our base because it is the simplest generalization of flat FLRW, allowing for different expansion rates along the $x, y,$ and $z$ axes (introducing **shear**, $\sigma$).
-
-We further allow for local spatial variations (inhomogeneity) to capture Buchert-style backreaction. The line element we are learning is effectively:
-
-$$ds^2 = -dt^2 + g_{xx}(t,\vec{x})dx^2 + g_{yy}(t,\vec{x})dy^2 + g_{zz}(t,\vec{x})dz^2 + g_{ij}(t,\vec{x})dx^i dx^j$$
-
-*Why this metric?* It allows the neural network to naturally discover if shear ($\sigma \neq 0$) or local expansion variance ($\mathcal{Q}_D \neq 0$) can replace $\Lambda$ to fit the distance-redshift data.
+### 2.2 The Target: Bianchi Type I & Shear ($\sigma$)
+We transition to **Bianchi Type I**, the simplest anisotropic generalization of FLRW. It allows for a "Hubble Tensor" where expansion rates $H_x, H_y, H_z$ can differ. This introduces the **shear tensor** $\sigma_{\mu\nu}$, which acts as an effective energy density in the Raychaudhuri equation:
+$$\dot{\theta} + \frac{1}{3}\theta^2 + \sigma^2 - \omega^2 = -4\pi G (\rho + 3p)$$
+Our model will test if a non-zero $\sigma^2$ at late times can mimic the acceleration attributed to $\Lambda$.
 
 ---
 
-## 3. Machine Learning Architecture (The PINN)
+## 3. Implementation Stack & Structure
 
-We will use **JAX** combined with **Equinox** or **Flax**. 
-*Why JAX?* PINNs require calculating second-order derivatives of the network output with respect to its inputs to construct the Einstein Tensor ($G_{\mu\nu}$). JAX's forward-mode and reverse-mode automatic differentiation (`jax.grad`, `jax.hessian`) are significantly faster and more memory-efficient for high-order PDEs than PyTorch's computational graph, which is crucial for fitting this onto an RTX 5070.
+### 3.1 Software Stack
+*   **JAX:** For high-order autodiff (`hessian`) required by the Einstein Tensor.
+*   **Equinox:** For representing the Neural Network as a pure PyTree.
+*   **Optax:** For gradient descent (Adam + L-BFGS for fine-tuning).
+*   **Diffrax:** For the differentiable ODE integration of null geodesics.
+*   **Astropy:** For consistent physical units (Mpc, $G$, $c$).
 
-### 3.1 Network Topology
-*   **Inputs:** 4-dimensional spacetime coordinates $(t, x, y, z)$. To handle the vast scales of cosmology, inputs must be normalized (e.g., $t$ in units of Hubble time, spatial coords in Mpc mapped to $[-1, 1]$).
-*   **Outputs:** 10 independent components of the symmetric $4\times4$ metric tensor $g_{\mu\nu}$.
-*   **Architecture:** A Multi-Layer Perceptron (MLP) with **Fourier Feature Mappings** (or Positional Encoding) at the input layer.
-    *   *Why Fourier Features?* Standard MLPs suffer from "spectral bias"—they struggle to learn high-frequency functions. The cosmic web is highly non-linear and "lumpy" (high frequency). Encoding $(t,x,y,z)$ into sine/cosine features allows the network to resolve local voids and filaments.
-*   **Activation Function:** `Tanh` or `SiREN` (Sine activations).
-    *   *Why SiREN?* The Einstein equations require smooth, continuous second derivatives. `ReLU` has a zero second derivative, making it useless for PINNs solving PDEs. `SiREN` preserves gradients perfectly across layers.
-
-### 3.2 Imposing Constraints via Network Design
-To ensure the metric has the correct physical signature $(-, +, +, +)$, the output layer must enforce positivity on the spatial diagonal components and strict negativity on the time component:
-*   $g_{00} = - \exp(\text{NetworkOutput}_{0})$
-*   $g_{ii} = \exp(\text{NetworkOutput}_{i})$
-*   *Why?* This prevents the network from exploring unphysical regions of the parameter space where time becomes space-like, which would cause the loss function to explode.
-
----
-
-## 4. The Loss Function (The Cosmic Optimizer)
-
-The PINN loss function is a weighted sum of three terms:
-$$\mathcal{L} = w_{Data} \mathcal{L}_{Data} + w_{Physics} \mathcal{L}_{Physics} + w_{Prior} \mathcal{L}_{Prior}$$
-
-### 4.1 The Physics Loss ($\mathcal{L}_{Physics}$)
-This forces the learned metric to obey General Relativity. We compute the Einstein Tensor $G_{\mu\nu}$ directly from the network outputs using automatic differentiation.
-$$\mathcal{L}_{Physics} = \frac{1}{N_{colloc}} \sum_{k=1}^{N_{colloc}} \left\| G_{\mu\nu}(x_k) + \Lambda g_{\mu\nu}(x_k) - 8\pi G T_{\mu\nu}(x_k) \right\|^2$$
-*   *Implementation Note:* We will set $\Lambda = 0$ as a hard constraint to see if the network can fit the data *without* Dark Energy.
-*   $T_{\mu\nu}$ will be modeled as a pressureless dust (Dark Matter + Baryons).
-*   $N_{colloc}$ are "collocation points" randomly sampled across the 4D spacetime domain.
-
-### 4.2 The Data Loss ($\mathcal{L}_{Data}$)
-This grounds the model in reality. Our primary target is the Type Ia Supernovae distance modulus ($\mu$).
-$$\mathcal{L}_{Data} = \frac{1}{N_{obs}} \sum_{i=1}^{N_{obs}} \left( \mu_{predicted}(z_i) - \mu_{observed}(z_i) \right)^2$$
-*   *The Hard Part:* To get $\mu_{predicted}$, we must integrate null geodesics ($ds^2 = 0$) from the observer ($t=now, \vec{x}=0$) to the supernova through our learned, lumpy metric. This requires a differential equation solver integrated *inside* the loss function. 
-*   *Why?* We cannot assume the simple FLRW distance-redshift relation $d_L(z)$. The light must travel through the learned anisotropic shear.
-
-### 4.3 The Prior/Regularization Loss ($\mathcal{L}_{Prior}$)
-To prevent the model from overfitting the local universe (e.g., creating wild, unphysical wormholes to explain a single outlier supernova), we enforce an asymptotic prior.
-$$\mathcal{L}_{Prior} = \lambda \int \| g_{\mu\nu} - g_{\mu\nu}^{FLRW} \|^2 \, d^4x \quad \text{for large } z$$
-*   *Why?* The CMB proves the early universe was nearly perfectly isotropic. We penalize deviations from FLRW at high redshifts ($z > 10$), allowing anisotropy to grow only at late times (low redshift), matching the growth of structure.
+### 3.2 Directory Architecture
+```text
+numrel/
+├── docs/               # Technical Design & References
+├── src/
+│   ├── core/           # Metric wrapper, Tensor calculus (Riemann, Ricci)
+│   ├── physics/        # EFE residuals, Geodesic equations, Friedmann
+│   ├── models/         # Equinox-based MLP & SiREN architectures
+│   ├── training/       # Loss functions, Trainers, Data loaders
+│   └── utils/          # Normalization, Coordinate transforms
+├── tests/
+│   ├── unit/           # Math verification (e.g., Schwarzschild test)
+│   └── integration/    # Training loop sanity checks
+└── pyproject.toml
+```
 
 ---
 
-## 5. Execution Plan & RTX 5070 Optimization
+## 4. Mathematical Implementation of the PINN
 
-Building this is complex. An engineer should tackle this in distinct phases:
+### 4.1 Metric Topology & Constraints
+The network $f_\theta: (t, x, y, z) \to \mathbb{R}^{10}$ outputs the unique components of the symmetric metric $g_{\mu\nu}$.
+*   **Signature Enforcement:** We ensure a Lorentzian signature $(-, +, +, +)$ by:
+    *   $g_{00} = - \exp(\text{NN}_0)$
+    *   $g_{ii} = \exp(\text{NN}_i)$
+*   **Activation Function:** `SiREN` (Sine activations). Since EFE requires $C^2$ continuity, Sine functions ensure that high-order gradients do not vanish or become discontinuous.
 
-### Phase 1: The "Spherical Cow" PINN (Weeks 1-2)
-*   **Goal:** Build a 1D PINN that learns the FLRW scale factor $a(t)$.
-*   **Action:** Input is just $t$. Output is $a(t)$. Data is mock $H(z)$ data. Physics loss is the standard Friedmann equation.
-*   **Why:** Validates the JAX autodiff pipeline and training loop before introducing spatial tensors.
+### 4.2 The Multi-Probe Loss Function
+$$\mathcal{L}_{Total} = w_P \mathcal{L}_{Physics} + w_D \mathcal{L}_{Data} + w_{Reg} \mathcal{L}_{Reg}$$
 
-### Phase 2: Autodiff Tensor Calculus Pipeline (Weeks 3-4)
-*   **Goal:** Compute $G_{\mu\nu}$ dynamically.
-*   **Action:** Write a JAX library that takes the neural network function $f(t,x,y,z) \rightarrow g_{\mu\nu}$ and automatically computes the Christoffel symbols, Riemann tensor, Ricci tensor, and finally the Einstein tensor.
-*   **Why:** Hard-coding these derivatives is impossible. We must rely on `jax.jacfwd` and `jax.jacrev`.
-
-### Phase 3: The Geodesic Ray-Tracer (Weeks 5-6)
-*   **Goal:** Map $g_{\mu\nu}$ to observables.
-*   **Action:** Implement a differentiable ODE solver (e.g., using `Diffrax` in JAX) to calculate the path of light rays from $z=0$ to $z=1.5$.
-*   **Why:** Without this, we cannot compare our metric to Supernova data.
-
-### Phase 4: Full Bianchi Integration & Training (Weeks 7-8)
-*   **Action:** Train the full model on the Pantheon+ Supernova dataset.
-*   **RTX 5070 Constraints:** The 5070 has excellent compute but limited VRAM (likely 12GB).
-    *   *Batch Size:* We must use small batch sizes for the observational data, but can sample millions of collocation points for $\mathcal{L}_{Physics}$ using `jax.vmap`.
-    *   *Mixed Precision:* Use `bfloat16` for the network weights, but *must* cast to `float32` or `float64` before calculating the Einstein tensor. GR equations are highly sensitive to numerical instability; $16$-bit floats will cause the Christoffel symbols to produce NaNs.
+1.  **Physics Loss ($\mathcal{L}_{Physics}$):**
+    Computes the residual of $G_{\mu\nu} - 8\pi G T_{\mu\nu} = 0$.
+    *   We use `jax.jacfwd(jax.jacrev(metric))` to get the second derivatives for the Ricci scalar.
+    *   $T_{\mu\nu}$ is modeled as a perfect fluid $T_{\mu\nu} = (\rho+p)u_\mu u_\nu + p g_{\mu\nu}$.
+2.  **Data Loss ($\mathcal{L}_{Data}$):**
+    Requires integrating the geodesic equation for light: $\frac{d^2 x^\mu}{d\lambda^2} + \Gamma^\mu_{\alpha\beta} \frac{dx^\alpha}{d\lambda} \frac{dx^\beta}{d\lambda} = 0$.
+    *   We solve this using `Diffrax` to find the luminosity distance $d_L(z)$ and compare against the **Pantheon+** dataset.
+3.  **Regularization ($\mathcal{L}_{Reg}$):**
+    Enforces the **Cosmological Principle** as a high-redshift prior ($z > 10$), penalizing $\sigma > 0$ in the early universe to remain consistent with CMB observations.
 
 ---
 
-## 6. Success Metrics & Analysis
+## 5. Phased Implementation Roadmap
+## 5. Exhaustive Phased Implementation Roadmap
 
-Once the model converges, we will freeze the weights and extract the physical insights:
-1.  **Extract the Shear ($\sigma$):** Analyze the off-diagonal spatial components of the learned metric. Does the network discover a preferred direction of expansion that correlates with the CMB Axis of Evil?
-2.  **Calculate Local $H_0$:** Compute the expansion rate at $\vec{x}=0$ vs. large distances. Does the model naturally produce a local "Hubble Bubble" to resolve the $73$ vs $67$ km/s/Mpc tension?
-3.  **Evaluate $\Lambda$:** If the model fits the Pantheon+ data with high accuracy while keeping the explicit $\Lambda = 0$ in the physics loss, we have successfully demonstrated that anisotropic geometry can replace Dark Energy.
+### Phase 1: The FLRW Control Baseline (Verification & Calibration)
+**Goal:** Prove the 4D PINN architecture can perfectly recover the standard $\Lambda$CDM model. This serves as our "Control Group" to ensure the tensor engine and loss functions are bug-free.
+
+*   **Task 1.1: Environment & Project Scaffolding**
+    *   Initialize `pyproject.toml` with the JAX/Equinox stack.
+    *   Set up the directory structure as defined in Section 3.2.
+*   **Task 1.2: Mock Data Generation**
+    *   Create a script `scripts/generate_mock_flrw.py` to produce a "Perfect FLRW" universe.
+    *   Generate a dataset of $d_L(z)$ values for $z \in [0, 2]$ using standard $\Lambda$CDM parameters ($\Omega_m=0.3, \Omega_\Lambda=0.7, H_0=70$).
+*   **Task 1.3: Training the Control Model**
+    *   Initialize the 4D Metric PINN but enforce **Isotropy Constraints** ($g_{xx} = g_{yy} = g_{zz}$ and all off-diagonals = 0).
+    *   Physics Loss: Include a non-zero $\Lambda$ term to match the mock data: $\mathcal{L}_{phys} = \|G_{\mu\nu} + \Lambda g_{\mu\nu} - 8\pi G T_{\mu\nu}\|^2$.
+*   **Task 1.4: Validation & Verification (V&V)**
+    *   **Scale Factor Recovery:** Extract $a(t) = \sqrt{g_{xx}(t, 0)}$ from the trained network. It must match the analytic FLRW scale factor within 0.1%.
+    *   **Residual Check:** After training, the $G_{\mu\nu}$ components must satisfy the 1st and 2nd Friedmann equations exactly.
+    *   **Metric Signature:** Verify via `jax.numpy.linalg.eigvals` that the signature remains $(-, +, +, +)$ at all points in the training domain.
+
+### Phase 2: The 4D Tensor Calculus Engine (The Physics Core)
+... (renumbered from here) ...
+
+**Goal:** Construct a robust library to compute $G_{\mu\nu}$ from any network $g_{\mu\nu}(t, x, y, z)$.
+
+*   **Task 2.1: The Metric Wrapper (`src/core/metric.py`)**
+    *   Implement `MetricTensor(equinox.Module)`:
+        *   Input: $(t, x, y, z)$. Output: 10 scalars representing the upper triangle of $g_{\mu\nu}$.
+        *   Hard-code the signature: $g_{00} = -\exp(out_0)$, $g_{ii} = \exp(out_i)$, off-diagonals = $out_j$.
+*   **Task 2.2: Automated Tensor Algebra (`src/core/tensors.py`)**
+    *   **Step A: Jacobian of the Metric.** Use `jax.jacfwd` to get $\partial_\gamma g_{\mu\nu}$.
+    *   **Step B: Inverse Metric.** Use `jax.lax.linalg.inv` (crucial for Christoffel symbols).
+    *   **Step C: Christoffel Symbols.** Implement $\Gamma^\alpha_{\mu\nu} = \frac{1}{2} g^{\alpha\sigma}(\partial_\mu g_{\nu\sigma} + \partial_\nu g_{\mu\sigma} - \partial_\sigma g_{\mu\nu})$.
+    *   **Step D: Ricci Tensor.** Implement $R_{\mu\nu} = \partial_\rho \Gamma^\rho_{\mu\nu} - \partial_\nu \Gamma^\rho_{\mu\rho} + \Gamma^\rho_{\mu\nu}\Gamma^\sigma_{\rho\sigma} - \Gamma^\sigma_{\mu\rho}\Gamma^\rho_{\nu\sigma}$.
+        *   *Note:* This requires the Hessian of the metric. Use `jax.jacfwd(jax.jacrev(model))` for maximum stability.
+*   **Task 2.3: Verification (The Schwarzschild Vacuum Test)**
+    *   Create `tests/unit/test_tensors.py`.
+    *   Define an analytic function for the Schwarzschild metric: $g_{00} = -(1-2M/r)$, $g_{rr} = (1-2M/r)^{-1}$, etc.
+    *   Pass this function into the tensor engine.
+    *   **Success Criterion:** All components of $R_{\mu\nu}$ must be zero to within $10^{-5}$ tolerance.
+
+### Phase 3: Differentiable Geodesic Ray-Tracer (The Observational Link)
+**Goal:** Map the learned metric to the Luminosity Distance $d_L(z)$ using `Diffrax`.
+
+*   **Task 3.1: The Null Geodesic ODE (`src/physics/geodesics.py`)**
+    *   Define the system of first-order ODEs:
+        1.  $\frac{d x^\mu}{d\lambda} = k^\mu$
+        2.  $\frac{d k^\mu}{d\lambda} = -\Gamma^\mu_{\alpha\beta} k^\alpha k^\beta$
+    *   Constraint: Light follows null paths ($g_{\mu\nu} k^\mu k^\beta = 0$).
+*   **Task 3.2: Differentiable Integration**
+    *   Use `diffrax.diffeqsolve` with `Tsit5()` (Runge-Kutta 5/4).
+    *   Implement the observer-to-source integration: Start at $t=now, \vec{x}=0$, integrate backwards in affine parameter $\lambda$ until the desired redshift $z$ is reached.
+    *   Calculate $d_L(z) = (1+z) r_{prop}$.
+*   **Task 3.3: Verification (FLRW Distance Match)**
+    *   Set the metric network to a frozen FLRW state.
+    *   Run the ray-tracer to compute $d_L(z)$ for $z \in [0, 1.5]$.
+    *   **Success Criterion:** $d_L(z)$ must match the analytic FLRW integral $\int dz/H(z)$ within 1%.
+
+### Phase 4: Full Bianchi Training & Analysis (The Discovery Phase)
+**Goal:** Train the full 4D PINN on the Pantheon+ Supernova dataset and analyze for shear.
+
+*   **Task 4.1: Data Ingestion (`src/training/data.py`)**
+    *   Load `Pantheon+` Supernovae: $(z_{cmb}, \mu_{obs}, \sigma_\mu)$.
+    *   Implement coordinate normalization: Map $z \in [0, 2]$ to $t \in [-1, 1]$.
+*   **Task 4.2: The Global Loss Optimizer**
+    *   Initialize `Optax.adam(learning_rate=1e-4)`.
+    *   **The Training Loop:**
+        1.  Sample $10,000$ random points $(t,x,y,z)$ for $\mathcal{L}_{Physics}$.
+        2.  Compute $G_{\mu\nu}$ at these points. Minimize $\|G_{\mu\nu}\|^2$ (assuming vacuum/dust).
+        3.  Compute $d_L(z)$ via Task 3.2 for the Supernova redshifts.
+        4.  Minimize $\chi^2 = \sum (\mu_{pred} - \mu_{obs})^2 / \sigma_\mu^2$.
+*   **Task 4.3: Final Analysis & Visualization**
+    *   **Shear Extraction:** Compute $\sigma^2 = \frac{1}{2}\sigma_{\mu\nu}\sigma^{\mu\nu}$ from the learned metric.
+    *   **Hubble Tension Check:** Calculate $H_0$ locally ($z < 0.01$) vs globally ($z > 0.1$).
+    *   **The "Lambda" Test:** Check if the physics residual $G_{\mu\nu}$ is minimized without requiring a $\Lambda g_{\mu\nu}$ term.
+
+
+---
+
+## 6. Testing & Validation
+*   **Unit Tests:** Verify $g_{\mu\nu}$ symmetry and signature.
+*   **Symmetry Tests:** Check if the learned metric respects the requested Bianchi Type I spatial symmetries.
+*   **Performance:** Benchmark training speed. The RTX 5070 must handle $\sim 10^5$ collocation points per minute.
