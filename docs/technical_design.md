@@ -20,17 +20,22 @@ $$\dot{\theta} + \frac{1}{3}\theta^2 + \sigma^2 - \omega^2 = -4\pi G (\rho + 3p)
 Our model will test if a non-zero $\sigma^2$ at late times can mimic the acceleration attributed to $\Lambda$.
 
 ---
-
 ## 3. Implementation Stack & Structure
 
 ### 3.1 Software Stack
-*   **JAX:** For high-order autodiff (`hessian`) required by the Einstein Tensor.
-*   **Equinox:** For representing the Neural Network as a pure PyTree.
-*   **Optax:** For gradient descent (Adam + L-BFGS for fine-tuning).
-*   **Diffrax:** For the differentiable ODE integration of null geodesics.
-*   **Astropy:** For consistent physical units (Mpc, $G$, $c$).
+...
 
-### 3.2 Directory Architecture
+### 3.2 Engineering Standards & Style Guide
+To ensure maintainability and consistency, the following standards are enforced:
+*   **Line Length:** Strict 80-character maximum.
+*   **Indentation:** 2-space indentation (no tabs).
+*   **Code Quality:** Enforced via `ruff` and `pre-commit`.
+*   **Testing:** 100% coverage required for core tensor math.
+*   **Type Hinting:** Mandatory for all functions (JAX `Array` types specified).
+
+### 3.3 Directory Architecture
+...
+
 ```text
 numrel/
 ├── docs/               # Technical Design & References
