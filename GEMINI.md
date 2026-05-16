@@ -12,6 +12,11 @@
   - Keep messages concise and focused on the "why".
   - Do NOT include trivial implementation details (e.g., "fixed indentation", "added 2 spaces").
 - **Staging:** Stage only files relevant to the task.
+- **Commit Process:**
+  - ALWAYS run relevant tests first.
+  - If tests pass, stage files and run `pre-commit` (do NOT use `--all-files` unless requested).
+  - Only if `pre-commit` passes, proceed to commit.
+  - NEVER combine tests, pre-commit, and git commands into a single shell command string or tool call.
 
 ## Technical Constants
 - **JAX:** Use `jnp` (jax.numpy) for mathematical operations.
