@@ -3,7 +3,7 @@ name = "lumpyspace"
 version = "0.1.0"
 description = "Inhomogeneous Cosmology PINN using JAX"
 dependencies = [
-  "jax[cuda12]",
+  "jax[cuda13]",
   "equinox",
   "optax",
   "diffrax",
