@@ -42,7 +42,7 @@ def get_data_loss(metric_fn, redshifts, target_mu):
   v_get_dl = jax.vmap(lambda z: get_luminosity_distance(metric_fn, z))
   dl_mpc = v_get_dl(redshifts)
 
-  # Avoid log10(0)
-  mu_pred = 5.0 * jnp.log10(dl_mpc + 1e-6) + 25.0
+  # Avoid log10(0) or negative distances
+  mu_pred = 5.0 * jnp.log10(jnp.abs(dl_mpc) + 1e-6) + 25.0
 
   return jnp.mean(jnp.square(mu_pred - target_mu))

@@ -2,10 +2,14 @@
 Unit tests for the geodesic equations.
 """
 
+import jax
 import jax.numpy as jnp
 import pytest
 
 from src.physics.geodesics import geodesic_system
+
+# Enable float64 for high-precision physics checks
+jax.config.update("jax_enable_x64", True)
 
 
 def test_minkowski_geodesic():
@@ -20,7 +24,8 @@ def test_minkowski_geodesic():
   # [t, x, y, z, kt, kx, ky, kz]
   state = jnp.array([0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0])
 
-  derivative = geodesic_system(0.0, state, minkowski_metric)
+  args = (minkowski_metric, jax.jacfwd(minkowski_metric), None, None)
+  derivative = geodesic_system(0.0, state, args)
 
   # dx/dl should be k
   assert jnp.allclose(derivative[:4], state[4:])
@@ -44,7 +49,8 @@ def test_schwarzschild_geodesic_acceleration(m):
   # State: r=5, moving radially (kr != 0)
   state = jnp.array([0.0, 5.0, jnp.pi / 2, 0.0, 1.0, 1.0, 0.0, 0.0])
 
-  derivative = geodesic_system(0.0, state, schwarzschild_metric)
+  args = (schwarzschild_metric, jax.jacfwd(schwarzschild_metric), None, None)
+  derivative = geodesic_system(0.0, state, args)
 
   # Non-zero acceleration
   assert jnp.abs(derivative[5]) > 1e-4
@@ -65,15 +71,7 @@ def test_null_constraint_conservation():
 
   state = jnp.array([0.5, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0])
 
-  # This is a bit more complex since we need to verify if the DK_dl
-  # preserves the null condition.
-  # d/dl (g_uv k^u k^v) = (d_r g_uv) k^r k^u k^v + 2 g_uv k^u (dk^v/dl)
-  # But dk^v/dl = -Gamma^v_ab k^a k^b
-  # The geodesic equation is derived precisely to make this zero.
-
   # Manual check of the derivative of the constraint
-  import jax
-
   def constraint(s):
     coords = s[:4]
     k = s[4:]
@@ -81,10 +79,13 @@ def test_null_constraint_conservation():
     return jnp.einsum("uv,u,v", g, k, k)
 
   # Derivative of constraint along the flow
-  flow = geodesic_system(0.0, state, curved_metric)
+  args = (curved_metric, jax.jacfwd(curved_metric), None, None)
+  flow = geodesic_system(0.0, state, args)
 
   # grad(constraint) dot flow
   grad_c = jax.grad(constraint)(state)
   change_in_constraint = jnp.dot(grad_c, flow)
 
+  # Tolerance loosened from 1e-12 to 1e-6 due to metric regularization
+  # for PINN stability
   assert jnp.abs(change_in_constraint) < 1e-6

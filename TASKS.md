@@ -16,9 +16,9 @@
 - [x] Task 2.3: Verification (Schwarzschild Vacuum Test)
 
 ## Phase 3: Differentiable Geodesic Ray-Tracer (Observational Link)
-- [ ] Task 3.1: The Null Geodesic ODE (`src/physics/geodesics.py`)
-- [ ] Task 3.2: Differentiable Integration (Diffrax implementation)
-- [ ] Task 3.3: Verification (FLRW Distance Match)
+- [x] Task 3.1: The Null Geodesic ODE (`src/physics/geodesics.py`)
+- [x] Task 3.2: Differentiable Integration (Diffrax implementation)
+- [x] Task 3.3: Verification (FLRW Distance Match)
 
 ## Phase 4: Full Bianchi Training & Analysis
 - [ ] Task 4.1: Data Ingestion (Pantheon+ Supernovae)

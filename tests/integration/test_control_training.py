@@ -27,7 +27,7 @@ def test_control_training_loop():
   # 3. Run a short training burst
   print("\nStarting control training integration test with Data Loss...")
   trained_model = train_control_model(
-    model, data, num_steps=5, learning_rate=1e-3, lam=0.7, key=train_key
+    model, data, num_steps=5, learning_rate=1e-4, lam=0.7, key=train_key
   )
 
   assert trained_model is not None

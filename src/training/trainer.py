@@ -22,7 +22,10 @@ def train_control_model(
   Executes the training loop for the FLRW control baseline.
   Minimizes combined EFE and Data residuals.
   """
-  optimizer = optax.adam(learning_rate)
+  # Use gradient clipping to stabilize training
+  optimizer = optax.chain(
+    optax.clip_by_global_norm(1.0), optax.adam(learning_rate)
+  )
   opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
 
   redshifts, target_mu = data
@@ -53,7 +56,11 @@ def train_control_model(
       model, opt_state, coords, redshifts, target_mu
     )
 
-    if i % 100 == 0:
+    if jnp.isnan(loss):
+      print(f"CRITICAL: NaN loss detected at step {i}. Terminating training.")
+      break
+
+    if i % 10 == 0:  # More frequent reporting for short tests
       print(f"Step {i}, Loss: {loss:.6e}")
 
   return model
