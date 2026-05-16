@@ -9,6 +9,13 @@ dependencies = [
   "diffrax",
   "astropy",
   "numpy",
+  "pandas",
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff",
+  "pre-commit",
 ]
 
 [tool.ruff]
