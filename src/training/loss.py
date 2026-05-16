@@ -2,9 +2,11 @@
 Loss functions for the FLRW control baseline.
 """
 
+import jax
 import jax.numpy as jnp
 
 from src.core.tensors import get_ricci_scalar, get_ricci_tensor
+from src.physics.geodesics import get_luminosity_distance
 
 
 def get_efe_loss(metric_fn, coords, lam=0.7, g_newton=1.0):
@@ -33,8 +35,14 @@ def get_efe_loss(metric_fn, coords, lam=0.7, g_newton=1.0):
 def get_data_loss(metric_fn, redshifts, target_mu):
   """
   Data loss against Supernova distance modulus.
-  Note: This currently uses a placeholder for dL(z) until Phase 3 is ready.
-  For the FLRW control, we can enforce a(t) matching directly.
+  dL is computed via the geodesic ray-tracer.
+  mu = 5 * log10(dL_mpc) + 25
   """
-  # TODO: Integrate with Phase 3 Geodesics
-  return 0.0
+  # Vectorize over redshifts
+  v_get_dl = jax.vmap(lambda z: get_luminosity_distance(metric_fn, z))
+  dl_mpc = v_get_dl(redshifts)
+
+  # Avoid log10(0)
+  mu_pred = 5.0 * jnp.log10(dl_mpc + 1e-6) + 25.0
+
+  return jnp.mean(jnp.square(mu_pred - target_mu))
