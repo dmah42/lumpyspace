@@ -10,7 +10,21 @@ from src.core.metric import MetricNN
 
 def test_metric_signature():
   """
-  Verify that the metric always enforces a Lorentzian signature (-, +, +, +).
+  Verification of the Lorentzian Signature Enforcement.
+
+  Physical Principle: For a spacetime to be physical, the metric must have
+  a Lorentzian signature (-, +, +, +). This ensures that we have one
+  time dimension and three spatial dimensions, preserving the causal
+  structure of General Relativity.
+
+  Verification Ritual:
+  1. Initialize a MetricNN with a random seed.
+  2. Evaluate the metric at the origin (0, 0, 0, 0).
+
+  Expected Outcome:
+  - The g00 component (time) must be negative.
+  - The g11, g22, and g33 components (space) must be positive.
+  - The tensor must be symmetric (g_uv = g_vu).
   """
   key = jax.random.PRNGKey(42)
   model = MetricNN(key)
@@ -31,7 +45,13 @@ def test_metric_signature():
 
 def test_metric_output_shape():
   """
-  Verify the output shape is (4, 4).
+  Verification of Metric Tensor Dimensionality.
+
+  Verification Ritual:
+  1. evaluates the MetricNN at a non-zero coordinate point.
+
+  Expected Outcome:
+  - The output must be a 4x4 matrix, representing the full 4D metric tensor.
   """
   key = jax.random.PRNGKey(0)
   model = MetricNN(key)

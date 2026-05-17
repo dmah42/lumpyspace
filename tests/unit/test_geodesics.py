@@ -14,7 +14,20 @@ jax.config.update("jax_enable_x64", True)
 
 def test_minkowski_geodesic():
   """
-  In Minkowski space, Gamma is zero, so dk/dl should be zero (straight lines).
+  Verification of Geodesic Equations in Flat Spacetime.
+
+  Physical Principle: In Minkowski space (flat spacetime), all Christoffel
+  symbols are zero. Therefore, the geodesic equation dk^mu/dl = 0 implies
+  that light travels in straight lines with constant four-momentum.
+
+  Verification Ritual:
+  1. Define a standard Minkowski metric.
+  2. Provide an initial state at the origin moving in the x-direction.
+  3. Calculate the derivative (flow) using the geodesic_system.
+
+  Expected Outcome:
+  - dx^mu/dl must exactly match the initial four-momentum k^mu.
+  - dk^mu/dl must be zero within numerical precision (1e-6).
   """
 
   def minkowski_metric(coords):
@@ -37,8 +50,22 @@ def test_minkowski_geodesic():
 @pytest.mark.parametrize("m", [0.5, 1.0, 2.0])
 def test_schwarzschild_geodesic_acceleration(m):
   """
-  In Schwarzschild space, a photon moving radially should experience
-  acceleration (dk/dl != 0).
+  Verification of Geodesic Acceleration in Curved Spacetime.
+
+  Physical Principle: In a Schwarzschild metric (spherical mass), the spacetime
+  is curved. A photon moving radially must experience non-zero 'acceleration'
+  in its coordinate four-momentum (dk^mu/dl != 0) due to the non-vanishing
+  gravitational field (Christoffel symbols).
+
+  Verification Ritual:
+  1. Define a Schwarzschild metric for a given mass 'm'.
+  2. Place a photon at r=5 moving radially.
+  3. Calculate the geodesic flow.
+
+  Expected Outcome:
+  - The radial component of the momentum derivative (dk^r/dl) must be
+    significantly non-zero (> 1e-4).
+  - Angular components should remain zero for purely radial motion.
   """
 
   def schwarzschild_metric(coords):
@@ -59,9 +86,24 @@ def test_schwarzschild_geodesic_acceleration(m):
 
 def test_null_constraint_conservation():
   """
-  A null geodesic must maintain g_uv k^u k^v = 0.
-  We check if the derivative of the null constraint is zero:
-  d/dl (g_uv k^u k^v) = 0
+  Verification of the Null Geodesic Constraint Conservation.
+
+  Physical Principle: A null geodesic (light ray) must always satisfy the
+  constraint g_uv k^u k^v = 0 along its entire path. This implies that the
+  derivative of this constraint along the geodesic flow must be zero.
+
+  Verification Ritual:
+  1. Define a time-dependent curved metric.
+  2. Calculate the geodesic flow at a specific state.
+  3. Use automatic differentiation (jax.grad) to find the gradient of the
+     null constraint function.
+  4. Perform the dot product (directional derivative) of the gradient and flow.
+
+  Expected Outcome:
+  - The change in the null constraint along the flow must be zero.
+  - Due to metric regularization (1e-6) added for PINN training stability,
+    we expect a small numerical residual, so we verify conservation to
+    within 1e-6.
   """
 
   def curved_metric(coords):

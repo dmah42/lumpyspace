@@ -11,7 +11,25 @@ from src.training.trainer import train_control_model
 
 def test_control_training_loop():
   """
-  Verify that the training loop can execute and reduce the combined loss.
+  Verification of the Hybrid Training Loop (Physics + Data).
+
+  Ritual Purpose: This test ensures that the core training infrastructure
+  is functional, JIT-compilable, and numerically stable. it verifies the
+  cooperation between the PINN (MetricNN), the Einstein Field Equation (EFE)
+  residual loss, and the observational (Supernova) data loss.
+
+  Verification Ritual:
+  1. Load a subset of mock FLRW supernova data.
+  2. Initialize a MetricNN and a stabilized Adam optimizer (with
+     gradient clipping).
+  3. Run a short training burst (5 steps) of the combined loss:
+     Loss = Physics_Residual + 10 * Observational_Residual.
+
+  Expected Outcome:
+  - The training loop must execute without numerical explosion (NaN).
+  - The loss should show a downward trend or remain stable, indicating that
+    the JAX gradient engine is successfully backpropagating through the
+    nested ODE integration.
   """
   key = jax.random.PRNGKey(42)
   model_key, train_key = jax.random.split(key)

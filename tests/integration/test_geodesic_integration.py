@@ -9,13 +9,26 @@ from src.physics.geodesics import get_luminosity_distance
 
 def test_flrw_distance_match():
   """
-  Verify that the ray-tracer recovers the analytic dL(z) for a Flat FLRW
-  Einstein-de Sitter universe (matter dominated, zero Lambda).
+  Verification of the Observational Link (Luminosity Distance in FLRW).
 
-  Metric: ds^2 = -dt^2 + a(t)^2 (dx^2 + dy^2 + dz^2)
-  For EdS: a(t) = (t / t0)^(2/3).
-  We set t0 = 1/H0 * (2/3) so that H(t0) = H0.
-  Analytic: dL = (2/H0) * (1 + z - sqrt(1 + z))
+  Physical Principle: In a flat Einstein-de Sitter (EdS) universe, there is a
+  well-known analytical relationship between a source's redshift (z) and its
+  luminosity distance (dL). By integrating null geodesics backwards from an
+  observer through a metric representing an EdS universe, we should recover
+  this analytical distance.
+
+  Verification Ritual:
+  1. Define a background metric representing a flat, matter-dominated FLRW
+     universe with H0=70.
+  2. Use the `get_luminosity_distance` ray-tracer to numerically integrate
+     light paths for redshifts z=0.1 and z=0.5.
+  3. Compare the numerical results with the analytical EdS solution:
+     dL = (2/H0) * (1 + z - sqrt(1 + z)).
+
+  Expected Outcome:
+  - The numerical ray-tracer must match the analytical solution to within
+    5%. This tolerance accounts for the interpolation resolution of the
+    integrated trajectory.
   """
   h0 = 70.0
   h0_mpc = h0 / 299792.458  # H0 in 1/Mpc
