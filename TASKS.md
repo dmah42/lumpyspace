@@ -21,6 +21,10 @@
 - [x] Task 3.3: Verification (FLRW Distance Match)
 
 ## Phase 4: Full Bianchi Training & Analysis
-- [ ] Task 4.1: Data Ingestion (Pantheon+ Supernovae)
+- [x] Task 4.1: Data Ingestion (Pantheon+ Supernovae)
+  - [x] Implement `load_pantheon_plus` with error handling
+  - [x] Implement `normalize_coordinates` for t in [-1, 1]
+  - [x] Create `scripts/download_pantheon.py` for reproducible ingestion
+  - [x] Verify integrity via integration tests
 - [ ] Task 4.2: Global Loss Optimizer
 - [ ] Task 4.3: Final Analysis & Visualization

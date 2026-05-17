@@ -84,5 +84,12 @@ The project maintains rigorous technical integrity through a comprehensive test 
 PYTHONPATH=. pytest tests
 ```
 
+### Data Acquisition
+To download the Pantheon+ dataset required for Phase 4:
+```bash
+python3 scripts/download_pantheon.py
+```
+This will manifest the data in `data/pantheon_plus.dat`.
+
 ---
 *Lumpyspace: Navigating the curvature of the cosmos with machine learning.*
