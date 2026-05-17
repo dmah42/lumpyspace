@@ -2,19 +2,26 @@
 Data loaders for the PINN.
 """
 
+from typing import Tuple
+
 import jax.numpy as jnp
 import pandas as pd
 
 
-def load_mock_data(file_path="data/mock_flrw.csv"):
+def load_mock_data(
+  file_path: str = "data/mock_flrw.csv",
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
   """Loads mock FLRW data for calibration."""
   df = pd.read_csv(file_path)
   z = jnp.array(df["z"].values)
   mu = jnp.array(df["mu"].values)
-  return z, mu
+  # Default error to 1.0 for mock data
+  return z, mu, jnp.ones_like(z)
 
 
-def load_pantheon_plus(file_path="data/pantheon_plus.dat"):
+def load_pantheon_plus(
+  file_path: str = "data/pantheon_plus.dat",
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
   """
   Loads the Pantheon+ supernova dataset.
   Columns: zCMB, MU_SH0ES, MU_SH0ES_ERR_DIAG
@@ -32,13 +39,10 @@ def load_pantheon_plus(file_path="data/pantheon_plus.dat"):
   return z[mask], mu[mask], err[mask]
 
 
-def normalize_coordinates(z, z_max=2.5):
+def normalize_coordinates(z: jnp.ndarray, z_max: float = 2.5) -> jnp.ndarray:
   """
   Normalizes redshift to training coordinate t in [-1, 1].
-  Following Task 4.1: Map z in [0, 2] to t in [-1, 1].
-  Actually, we use z_max for safety.
   t = 1 - 2 * (z / z_max)
-  So z=0 -> t=1, z=z_max -> t=-1.
   """
   t = 1.0 - 2.0 * (z / z_max)
   return t

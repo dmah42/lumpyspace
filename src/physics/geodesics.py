@@ -2,13 +2,17 @@
 Null geodesic equations for ray-tracing in arbitrary metrics.
 """
 
+from typing import Any, Callable, Tuple
+
 import diffrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 
 
-def geodesic_system(affine_param, state, args):
+def geodesic_system(
+  affine_param: jnp.ndarray, state: jnp.ndarray, args: Tuple[Any, ...]
+) -> jnp.ndarray:
   """
   Defines the first-order ODE system for geodesics:
   dx^mu/dl = k^mu
@@ -39,7 +43,11 @@ def geodesic_system(affine_param, state, args):
   return jnp.concatenate([dcoords_dl, dk_dl])
 
 
-def get_redshift(metric_fn, state_obs, state_source):
+def get_redshift(
+  metric_fn: Callable[[jnp.ndarray], jnp.ndarray],
+  state_obs: jnp.ndarray,
+  state_source: jnp.ndarray,
+) -> jnp.ndarray:
   """
   Calculates redshift 1+z = (u . k)_source / (u . k)_obs.
   """
@@ -60,7 +68,9 @@ def get_redshift(metric_fn, state_obs, state_source):
   return uk_src / uk_obs
 
 
-def _check_redshift_termination(t, state, args, **kwargs):
+def _check_redshift_termination(
+  t: jnp.ndarray, state: jnp.ndarray, args: Tuple[Any, ...], **kwargs
+) -> jnp.ndarray:
   metric_fn, _, initial_state, z_limit = args
   # Terminate if state becomes NaN to prevent infinite streams of errors
   is_nan = jnp.any(jnp.isnan(state))
@@ -69,7 +79,12 @@ def _check_redshift_termination(t, state, args, **kwargs):
 
 
 @eqx.filter_jit
-def _integrate_geodesic(metric_fn, initial_state, l_max, z_limit):
+def _integrate_geodesic(
+  metric_fn: Callable[[jnp.ndarray], jnp.ndarray],
+  initial_state: jnp.ndarray,
+  l_max: float,
+  z_limit: float,
+) -> diffrax.Solution:
   # Pre-calculate Jacobian function once
   jac_fn = jax.jacfwd(metric_fn)
 
@@ -96,16 +111,21 @@ def _integrate_geodesic(metric_fn, initial_state, l_max, z_limit):
   return sol
 
 
-def get_luminosity_distance(metric_fn, z_target):
+def get_luminosity_distance(
+  metric_fn: Callable[[jnp.ndarray], jnp.ndarray], z_target: float
+) -> jnp.ndarray:
   """
   Calculates dL(z) by integrating null geodesics backwards from observer.
+  Observer is placed at t=1.0 (today) in the normalized training domain.
   """
-  # 1. Setup Observer
-  g_obs = metric_fn(jnp.zeros(4))
+  # 1. Setup Observer at t=1.0 (Present day)
+  obs_coords = jnp.array([1.0, 0.0, 0.0, 0.0])
+  g_obs = metric_fn(obs_coords)
   kt = 1.0
+  # Ensure kx is null: g00*kt^2 + g11*kx^2 = 0 => kx = kt * sqrt(-g00/g11)
   kx = kt * jnp.sqrt(jnp.abs(g_obs[0, 0]) / g_obs[1, 1])
   initial_k = jnp.array([kt, kx, 0.0, 0.0])
-  initial_state = jnp.concatenate([jnp.zeros(4), initial_k])
+  initial_state = jnp.concatenate([obs_coords, initial_k])
 
   # 2. Integrate
   # Use a safety margin for redshift termination

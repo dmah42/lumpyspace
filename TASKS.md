@@ -26,5 +26,9 @@
   - [x] Implement `normalize_coordinates` for t in [-1, 1]
   - [x] Create `scripts/download_pantheon.py` for reproducible ingestion
   - [x] Verify integrity via integration tests
-- [ ] Task 4.2: Global Loss Optimizer
+- [x] Task 4.2: Global Loss Optimizer
+  - [x] Implement weighted chi-squared loss for observational data
+  - [x] Integrate coordinate normalization into training loop
+  - [x] Add full type annotations to training/physics pipeline
+  - [x] Align coordinate systems (z=0 -> t=1) across data/ray-tracer
 - [ ] Task 4.3: Final Analysis & Visualization

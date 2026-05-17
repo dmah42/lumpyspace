@@ -9,7 +9,7 @@ from src.training.data import load_mock_data
 from src.training.trainer import train_control_model
 
 
-def test_control_training_loop():
+def test_control_training_loop() -> None:
   """
   Verification of the Hybrid Training Loop (Physics + Data).
 
@@ -34,10 +34,10 @@ def test_control_training_loop():
   key = jax.random.PRNGKey(42)
   model_key, train_key = jax.random.split(key)
 
-  # 1. Load Mock Data
-  z, mu = load_mock_data()
+  # 1. Load Mock Data (z, mu, mu_err)
+  data = load_mock_data()
   # Use a smaller subset for fast integration test
-  data = (z[:5], mu[:5])
+  subset_data = (data[0][:5], data[1][:5], data[2][:5])
 
   # 2. Initialize Model
   model = MetricNN(model_key)
@@ -45,7 +45,7 @@ def test_control_training_loop():
   # 3. Run a short training burst
   print("\nStarting control training integration test with Data Loss...")
   trained_model = train_control_model(
-    model, data, num_steps=5, learning_rate=1e-4, lam=0.7, key=train_key
+    model, subset_data, num_steps=5, learning_rate=1e-4, lam=0.7, key=train_key
   )
 
   assert trained_model is not None

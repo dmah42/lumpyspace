@@ -2,6 +2,8 @@
 Loss functions for the FLRW control baseline.
 """
 
+from typing import Callable
+
 import jax
 import jax.numpy as jnp
 
@@ -9,7 +11,11 @@ from src.core.tensors import get_ricci_scalar, get_ricci_tensor
 from src.physics.geodesics import get_luminosity_distance
 
 
-def get_efe_loss(metric_fn, coords, lam=0.7, g_newton=1.0):
+def get_efe_loss(
+  metric_fn: Callable[[jnp.ndarray], jnp.ndarray],
+  coords: jnp.ndarray,
+  lam: float = 0.7,
+) -> jnp.ndarray:
   """
   Computes the residual of the Einstein Field Equations:
   G_mu_nu + Lambda * g_mu_nu - 8*pi*G * T_mu_nu = 0
@@ -32,11 +38,18 @@ def get_efe_loss(metric_fn, coords, lam=0.7, g_newton=1.0):
   return jnp.mean(jnp.square(residual))
 
 
-def get_data_loss(metric_fn, redshifts, target_mu):
+def get_data_loss(
+  metric_fn: Callable[[jnp.ndarray], jnp.ndarray],
+  redshifts: jnp.ndarray,
+  target_mu: jnp.ndarray,
+  mu_err: jnp.ndarray,
+) -> jnp.ndarray:
   """
   Data loss against Supernova distance modulus.
   dL is computed via the geodesic ray-tracer.
   mu = 5 * log10(dL_mpc) + 25
+
+  Computes the weighted chi-squared statistic.
   """
   # Vectorize over redshifts
   v_get_dl = jax.vmap(lambda z: get_luminosity_distance(metric_fn, z))
@@ -45,4 +58,5 @@ def get_data_loss(metric_fn, redshifts, target_mu):
   # Avoid log10(0) or negative distances
   mu_pred = 5.0 * jnp.log10(jnp.abs(dl_mpc) + 1e-6) + 25.0
 
-  return jnp.mean(jnp.square(mu_pred - target_mu))
+  # Weighted Chi-Squared: mean( ((pred - obs) / err)^2 )
+  return jnp.mean(jnp.square((mu_pred - target_mu) / mu_err))

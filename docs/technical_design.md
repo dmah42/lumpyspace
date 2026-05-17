@@ -75,6 +75,14 @@ $$\mathcal{L}_{Total} = w_P \mathcal{L}_{Physics} + w_D \mathcal{L}_{Data} + w_{
 3.  **Regularization ($\mathcal{L}_{Reg}$):**
     Enforces the **Cosmological Principle** as a high-redshift prior ($z > 10$), penalizing $\sigma > 0$ in the early universe to remain consistent with CMB observations.
 
+### 4.3 The CMB Isotropy Paradox (Open Research Question)
+**The Tension:** This project aims to "relax strict homogeneity and isotropy assumptions." However, Task 4.2 originally proposed a "high-redshift prior" that forces the model toward isotropy at $z > 10$. This risks "baking in" the FLRW result we are trying to test.
+
+**The Investigation:**
+- **The Question:** Does the metric *become* isotropic at high redshift, or does it only *appear* isotropic in our observations?
+- ** Nuanced Constraint:** Instead of a hard penalty for any $\sigma > 0$ (shear), we should investigate implementing a "CMB-consistent bound." This would allow the model to explore anisotropic solutions as long as their observational signature at the surface of last scattering remains within the $10^{-5}$ fluctuations observed by Planck/WMAP.
+- **Future Task:** We must determine how to map 4D metric fluctuations to the CMB temperature power spectrum to create a non-biased high-redshift constraint.
+
 ---
 
 ## 5. Phased Implementation Roadmap
