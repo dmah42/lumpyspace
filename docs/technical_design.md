@@ -156,11 +156,26 @@ $$\mathcal{L}_{Total} = w_P \mathcal{L}_{Physics} + w_D \mathcal{L}_{Data} + w_{
         2.  Compute $G_{\mu\nu}$ at these points. Minimize $\|G_{\mu\nu}\|^2$ (assuming vacuum/dust).
         3.  Compute $d_L(z)$ via Task 3.2 for the Supernova redshifts.
         4.  Minimize $\chi^2 = \sum (\mu_{pred} - \mu_{obs})^2 / \sigma_\mu^2$.
-*   **Task 4.3: Final Analysis & Visualization**
-    *   **Shear Extraction:** Compute $\sigma^2 = \frac{1}{2}\sigma_{\mu\nu}\sigma^{\mu\nu}$ from the learned metric.
-    *   **Hubble Tension Check:** Calculate $H_0$ locally ($z < 0.01$) vs globally ($z > 0.1$).
-    *   **The "Lambda" Test:** Check if the physics residual $G_{\mu\nu}$ is minimized without requiring a $\Lambda g_{\mu\nu}$ term.
-
+*   **Task 4.3: Deep Metric Extraction & Shear Analysis**
+    *   **Goal:** Quantify the physical deviations from FLRW by extracting the shear tensor and expansion rates.
+    *   **Implementation:**
+        *   Compute the **Shear Tensor** $\sigma_{\mu\nu}$ using the first derivatives of the metric.
+        *   Calculate the scalar shear $\sigma^2 = \frac{1}{2}\sigma_{\mu\nu}\sigma^{\mu\nu}$.
+        *   Extract the **Hubble Tensor** $H_{ij}$ and compare expansion rates along the x, y, and z axes.
+        *   Generate the final **Hubble Diagram** showing the Pantheon+ fit, CC residuals, and shear evolution.
+    *   **Success Criterion:** Identification of the primary expansion axis and its alignment with known cosmological structures (e.g., CMB dipole).
+*   **Task 4.4: Out-of-Sample Validation (Cosmic Chronometers)**
+    *   **Goal:** Verify the PINN-learned expansion history against independent, non-distance-ladder measurements.
+    *   **Implementation:**
+        *   Ingest the 32-point **Cosmic Chronometers** $H(z)$ dataset.
+        *   Extract $H(z)$ directly from the learned metric using $H(z) = -\frac{1}{1+z}\frac{dz}{dt}$.
+        *   Compute the residuals and $\chi^2$ against the CC data without further training.
+    *   **Success Criterion:** The PINN model must achieve a reduced $\chi^2 \approx 1$ against the independent CC dataset.
+*   **Task 4.5: Model Selection & Final Synthesis**
+    *   **Goal:** Statistically determine if the inhomogeneous model is superior to $\Lambda$CDM.
+    *   **Implementation:**
+        *   Compute the **AIC (Akaike Information Criterion)** and **BIC (Bayesian Information Criterion)** for both the PINN and a standard FLRW fit.
+    *   **Success Criterion:** Final determination of whether the data statistically justifies a "lumpy" universe over a smooth one.
 
 ---
 
