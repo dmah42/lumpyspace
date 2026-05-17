@@ -14,9 +14,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "ruff",
+  "ipykernel",
+  "IPython",
+  "matplotlib",
   "pre-commit",
   "pytest",
+  "ruff",
 ]
 
 [tool.ruff]

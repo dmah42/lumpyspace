@@ -41,3 +41,4 @@ checkpoints/
 # Data (Ignore generated mock data, keep the directory structure)
 data/*
 !data/.gitkeep
+logs/

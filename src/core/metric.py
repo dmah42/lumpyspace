@@ -30,12 +30,37 @@ class MetricNN(eqx.Module):
       key=key,
     )
 
+    # Initialize the final layer to be NEAR Minkowski.
+    # We add tiny random noise to avoid the 'perfect' zero-derivative
+    # trap that causes NaN gradients in the solver.
+    k1, k2 = jax.random.split(key)
+
+    def seed_layer(layer, l_key):
+      if isinstance(layer, eqx.nn.Linear):
+        # Zero the weights
+        layer = eqx.tree_at(
+          lambda _layer: _layer.weight, layer, jnp.zeros_like(layer.weight)
+        )
+        # Add tiny numerical noise to biases
+        noise = jax.random.normal(l_key, (10,)) * 1e-5
+        layer = eqx.tree_at(lambda _layer: _layer.bias, layer, noise)
+        return layer
+      return layer
+
+    last_idx = len(self.mlp.layers) - 1
+    new_layers = list(self.mlp.layers)
+    new_layers[last_idx] = seed_layer(new_layers[last_idx], k2)
+    self.mlp = eqx.tree_at(lambda m: m.layers, self.mlp, tuple(new_layers))
+
   def __call__(self, coords: jnp.ndarray) -> jnp.ndarray:
     """
     Computes the metric components at given coordinates.
     Ensures Lorentzian signature (-, +, +, +) via exponentiation.
     """
-    out = self.mlp(coords)
+    # Clip coordinates to prevent singularities in random metrics during early
+    # training if the ray-tracer wanders outside safe domain.
+    safe_coords = jnp.clip(coords, -6.0, 6.0)
+    out = self.mlp(safe_coords)
 
     # Enforce Lorentzian signature as per technical design 4.1
     # g00 must be negative, g_ii must be positive

@@ -39,10 +39,10 @@ def load_pantheon_plus(
   return z[mask], mu[mask], err[mask]
 
 
-def normalize_coordinates(z: jnp.ndarray, z_max: float = 2.5) -> jnp.ndarray:
+def normalize_coordinates(z: jnp.ndarray) -> jnp.ndarray:
   """
-  Normalizes redshift to training coordinate t in [-1, 1].
-  t = 1 - 2 * (z / z_max)
+  Normalizes redshift to training coordinate t.
+  Scale: z=0 -> t=1.0, z=1.0 -> t=0.0
+  Equation: t = 1.0 - z
   """
-  t = 1.0 - 2.0 * (z / z_max)
-  return t
+  return 1.0 - z

@@ -96,8 +96,13 @@ def train_model(
   with _get_log_writer(log_path) as writer_context:
     for i in range(max_steps):
       key, subkey = jax.random.split(key)
-      # Sample points in the normalized training domain [-1, 1]
-      coords = jax.random.uniform(subkey, (128, 4), minval=-1.0, maxval=1.0)
+      # We sample coordinates across the physical domain [-4.0, 1.0]
+      # to ensure the metric is constrained well beyond the supernova data.
+      t_coords = jax.random.uniform(subkey, (128, 1), minval=-4.0, maxval=1.0)
+      spatial_coords = jax.random.uniform(
+        subkey, (128, 3), minval=-1.0, maxval=1.0
+      )
+      coords = jnp.concatenate([t_coords, spatial_coords], axis=1)
 
       model, opt_state, _, metrics = step(
         model, opt_state, coords, redshifts, target_mu, mu_err

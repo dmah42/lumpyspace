@@ -4,7 +4,7 @@ Verification test for the geodesic ray-tracer against analytic FLRW solutions.
 
 import jax.numpy as jnp
 
-from src.physics.geodesics import get_luminosity_distance
+from src.physics.geodesics import L_UNIT, get_luminosity_distance
 
 
 def test_flrw_distance_match():
@@ -20,26 +20,25 @@ def test_flrw_distance_match():
   Verification Ritual:
   1. Define a background metric representing a flat, matter-dominated FLRW
      universe with H0=70.
-  2. Use the `get_luminosity_distance` ray-tracer to numerically integrate
+  2. The metric must be aware of the characteristic scale L_UNIT (1000 Mpc).
+  3. Use the `get_luminosity_distance` ray-tracer to numerically integrate
      light paths for redshifts z=0.1 and z=0.5.
-  3. Compare the numerical results with the analytical EdS solution:
-     dL = (2/H0) * (1 + z - sqrt(1 + z)).
+  4. Compare the numerical results with the analytical EdS solution.
 
   Expected Outcome:
   - The numerical ray-tracer must match the analytical solution to within
-    5%. This tolerance accounts for the interpolation resolution of the
-    integrated trajectory.
+    5%.
   """
   h0 = 70.0
   h0_mpc = h0 / 299792.458  # H0 in 1/Mpc
-  t0 = (2.0 / 3.0) / h0_mpc  # Age of universe in EdS
+  t0 = (2.0 / 3.0) / h0_mpc  # Age of universe in EdS (Mpc)
 
   def flrw_eds_metric(coords):
     t, x, y, z = coords
-    # PINN time is relative to today (t=0).
-    # Global cosmic time is T = t0 + t
-    cosmic_time = t0 + t
-    # Scale factor a(T) = (T/t0)^(2/3)
+    # PINN time is relative to today (t=1).
+    # Global cosmic time is T = t0 + (t - 1.0) * L_UNIT
+    # (Since c=1 in these units, and 1 coordinate unit = L_UNIT Mpc)
+    cosmic_time = t0 + (t - 1.0) * L_UNIT
     # Ensure cosmic_time is positive
     cosmic_time = jnp.maximum(cosmic_time, 1e-6)
     a = jnp.power(cosmic_time / t0, 2.0 / 3.0)
@@ -63,5 +62,5 @@ def test_flrw_distance_match():
     print(f"dL Analytic: {dl_analytic:.4f} Mpc")
 
     rel_error = jnp.abs(dl_numeric - dl_analytic) / dl_analytic
-    # Increased tolerance to 5% due to interpolation resolution
+    # Tolerance accounts for 50-point interpolation
     assert rel_error < 0.05
