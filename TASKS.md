@@ -31,6 +31,8 @@
   - [x] Integrate coordinate normalization into training loop
   - [x] Add full type annotations to training/physics pipeline
   - [x] Align coordinate systems (z=0 -> t=1) across data/ray-tracer
+  - [x] Implement convergence-based early stopping and CSV telemetry
+  - [x] Create `src/training/run.py` for production execution
 - [ ] Task 4.3: Deep Metric Extraction & Shear Analysis
 - [ ] Task 4.4: Out-of-Sample Validation (Cosmic Chronometers)
 - [ ] Task 4.5: Model Selection & Final Synthesis

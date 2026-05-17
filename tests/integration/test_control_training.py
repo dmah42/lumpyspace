@@ -1,12 +1,12 @@
 """
-Integration test for the FLRW control training loop.
+Integration test for the training loop using mock data.
 """
 
 import jax
 
 from src.core.metric import MetricNN
 from src.training.data import load_mock_data
-from src.training.trainer import train_control_model
+from src.training.trainer import train_model
 
 
 def test_control_training_loop() -> None:
@@ -43,9 +43,15 @@ def test_control_training_loop() -> None:
   model = MetricNN(model_key)
 
   # 3. Run a short training burst
-  print("\nStarting control training integration test with Data Loss...")
-  trained_model = train_control_model(
-    model, subset_data, num_steps=5, learning_rate=1e-4, lam=0.7, key=train_key
+  print("\nStarting control training test with mock data...")
+  trained_model = train_model(
+    model,
+    subset_data,
+    max_steps=5,
+    learning_rate=1e-4,
+    lam=0.7,
+    key=train_key,
+    log_path=None,
   )
 
   assert trained_model is not None
