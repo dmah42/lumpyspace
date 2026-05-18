@@ -39,6 +39,7 @@ def train_model(
   target_loss: float = 1e-6,
   patience: int = 500,
   log_path: Optional[str] = "logs/training_metrics.csv",
+  checkpoint_path: Optional[str] = None,
   key: Optional[jax.Array] = None,
 ) -> eqx.Module:
   """
@@ -140,6 +141,9 @@ def train_model(
       if current_loss < best_loss:
         best_loss = current_loss
         patience_counter = 0
+        if checkpoint_path:
+          os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+          eqx.tree_serialise_leaves(checkpoint_path, model)
       else:
         patience_counter += 1
 
