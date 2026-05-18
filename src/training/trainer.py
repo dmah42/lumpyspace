@@ -5,7 +5,6 @@ Training library for the PINN, including early stopping and telemetry.
 import csv
 import os
 from contextlib import contextmanager
-from typing import Dict, Optional, Tuple
 
 import equinox as eqx
 import jax
@@ -16,7 +15,7 @@ from src.training.loss import get_data_loss, get_efe_loss
 
 
 @contextmanager
-def _get_log_writer(log_path: Optional[str]):
+def _get_log_writer(log_path: str | None):
   """Helper to handle optional CSV logging."""
   if log_path is None:
     yield None
@@ -32,15 +31,15 @@ def _get_log_writer(log_path: Optional[str]):
 
 def train_model(
   model: eqx.Module,
-  data: Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray],
+  data: tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray],
   max_steps: int = 10000,
   learning_rate: float = 1e-4,
   lam: float = 0.7,
   target_loss: float = 1e-6,
   patience: int = 500,
-  log_path: Optional[str] = "logs/training_metrics.csv",
-  checkpoint_path: Optional[str] = None,
-  key: Optional[jax.Array] = None,
+  log_path: str | None = "logs/training_metrics.csv",
+  checkpoint_path: str | None = None,
+  key: jax.Array | None = None,
 ) -> eqx.Module:
   """
   Executes the training loop for the PINN.
@@ -62,7 +61,7 @@ def train_model(
     redshifts: jnp.ndarray,
     target_mu: jnp.ndarray,
     mu_err: jnp.ndarray,
-  ) -> Tuple[eqx.Module, optax.OptState, jnp.ndarray, Dict[str, jnp.ndarray]]:
+  ) -> tuple[eqx.Module, optax.OptState, jnp.ndarray, dict[str, jnp.ndarray]]:
     def loss_fn(model):
       # 1. Physics Loss (EFE residuals)
       v_efe_loss = jax.vmap(lambda c: get_efe_loss(model, c, lam=lam))
