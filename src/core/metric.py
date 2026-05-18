@@ -37,12 +37,12 @@ class MetricNN(eqx.Module):
 
     def seed_layer(layer, l_key):
       if isinstance(layer, eqx.nn.Linear):
-        # Zero the weights
-        layer = eqx.tree_at(
-          lambda _layer: _layer.weight, layer, jnp.zeros_like(layer.weight)
-        )
+        # Initialize weights with tiny numerical noise to avoid zero-derivatives
+        noise_w = jax.random.normal(l_key, layer.weight.shape) * 1e-4
+        layer = eqx.tree_at(lambda _layer: _layer.weight, layer, noise_w)
+
         # Add tiny numerical noise to biases
-        noise = jax.random.normal(l_key, (10,)) * 1e-5
+        noise = jax.random.normal(l_key, (10,)) * 1e-4
         layer = eqx.tree_at(lambda _layer: _layer.bias, layer, noise)
         return layer
       return layer

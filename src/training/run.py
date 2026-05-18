@@ -3,7 +3,6 @@ Execution entry point for production training on Pantheon+ data.
 """
 
 import os
-from typing import Tuple
 
 import equinox as eqx
 import jax
@@ -16,7 +15,7 @@ from src.training.trainer import train_model
 
 def run_training(
   max_steps: int = 10000,
-  learning_rate: float = 1e-4,
+  learning_rate: float = 1e-8,
   target_loss: float = 1e-6,
   patience: int = 500,
   checkpoint_path: str = "checkpoints/pinn_metric.eqx",
@@ -33,7 +32,7 @@ def run_training(
   print("Loading Pantheon+ Supernova dataset...")
   try:
     # load_pantheon_plus returns (z, mu, mu_err)
-    data: Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray] = load_pantheon_plus()
+    data: tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray] = load_pantheon_plus()
   except FileNotFoundError:
     print("Error: Pantheon+ data not found. Run scripts/download_pantheon.py.")
     return

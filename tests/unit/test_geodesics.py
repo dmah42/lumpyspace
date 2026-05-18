@@ -37,7 +37,7 @@ def test_minkowski_geodesic():
   # [t, x, y, z, kt, kx, ky, kz]
   state = jnp.array([0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0])
 
-  args = (minkowski_metric, jax.jacfwd(minkowski_metric), None, None)
+  args = (minkowski_metric, jax.jacfwd(minkowski_metric), None, None, False)
   derivative = geodesic_system(0.0, state, args)
 
   # dx/dl should be k
@@ -76,7 +76,13 @@ def test_schwarzschild_geodesic_acceleration(m):
   # State: r=5, moving radially (kr != 0)
   state = jnp.array([0.0, 5.0, jnp.pi / 2, 0.0, 1.0, 1.0, 0.0, 0.0])
 
-  args = (schwarzschild_metric, jax.jacfwd(schwarzschild_metric), None, None)
+  args = (
+    schwarzschild_metric,
+    jax.jacfwd(schwarzschild_metric),
+    None,
+    None,
+    False,
+  )
   derivative = geodesic_system(0.0, state, args)
 
   # Non-zero acceleration
@@ -121,7 +127,7 @@ def test_null_constraint_conservation():
     return jnp.einsum("uv,u,v", g, k, k)
 
   # Derivative of constraint along the flow
-  args = (curved_metric, jax.jacfwd(curved_metric), None, None)
+  args = (curved_metric, jax.jacfwd(curved_metric), None, None, False)
   flow = geodesic_system(0.0, state, args)
 
   # grad(constraint) dot flow

@@ -28,7 +28,7 @@ def geodesic_system(
   """
   coords = state[:4]
   k = state[4:]
-  metric_fn, jac_fn, _, _ = args
+  metric_fn, jac_fn, _, _, should_log = args
 
   # Regularize metric to ensure invertibility during early training
   g = metric_fn(coords)
@@ -46,15 +46,18 @@ def geodesic_system(
   dcoords_dl = k
   dk_dl = -jnp.einsum("abc,b,c->a", gamma, k, k)
 
-  # Only print in debug mode to avoid massive IO bottleneck in production
-  # because we trace 1701 supernovae per step.
+  # Only print in debug mode AND if this ray is selected for logging
   if os.environ.get("LUMPY_DEBUG") == "1":
-    jax.debug.print(
-      "Step: l={l} t={t} | g00={g00} | gamma_max={gamma}",
-      l=affine_param,
-      t=coords[0],
-      g00=g[0, 0],
-      gamma=jnp.max(jnp.abs(gamma)),
+    jax.lax.cond(
+      should_log,
+      lambda: jax.debug.print(
+        "Step: l={l} t={t} | g00={g00} | gamma_max={gamma}",
+        l=affine_param,
+        t=coords[0],
+        g00=g[0, 0],
+        gamma=jnp.max(jnp.abs(gamma)),
+      ),
+      lambda: None,
     )
 
   return jnp.concatenate([dcoords_dl, dk_dl])
@@ -89,7 +92,7 @@ def get_redshift(
 def _check_redshift_termination(
   t: jnp.ndarray, state: jnp.ndarray, args: Tuple[Any, ...], **kwargs
 ) -> jnp.ndarray:
-  metric_fn, _, initial_state, z_limit = args
+  metric_fn, _, initial_state, z_limit, should_log = args
   # Terminate if state becomes non-finite (NaN or Inf)
   is_invalid = jnp.logical_not(jnp.all(jnp.isfinite(state)))
 
@@ -102,15 +105,19 @@ def _check_redshift_termination(
   # where the neural metric is undefined/singular.
   out_of_bounds = state[0] < -5.0
 
-  # DEBUG: Monitor event triggers
+  # DEBUG: Monitor event triggers for selected ray
   if os.environ.get("LUMPY_DEBUG") == "1":
-    jax.debug.print(
-      "Event Check: t={t} z={z} | Invalid={inv} OverZ={oz} Bounds={oob}",
-      t=state[0],
-      z=z,
-      inv=is_invalid,
-      oz=over_z,
-      oob=out_of_bounds,
+    jax.lax.cond(
+      should_log,
+      lambda: jax.debug.print(
+        "Event Check: t={t} z={z} | Invalid={inv} OverZ={oz} Bounds={oob}",
+        t=state[0],
+        z=z,
+        inv=is_invalid,
+        oz=over_z,
+        oob=out_of_bounds,
+      ),
+      lambda: None,
     )
 
   return jnp.logical_or(jnp.logical_or(is_invalid, over_z), out_of_bounds)
@@ -122,6 +129,7 @@ def _integrate_geodesic(
   initial_state: jnp.ndarray,
   l_max: float,
   z_limit: float,
+  should_log: bool = False,
 ) -> diffrax.Solution:
   # Pre-calculate Jacobian function once
   jac_fn = jax.jacfwd(metric_fn)
@@ -140,7 +148,7 @@ def _integrate_geodesic(
     t1=l_max,
     dt0=-1.0,
     y0=initial_state,
-    args=(metric_fn, jac_fn, initial_state, z_limit),
+    args=(metric_fn, jac_fn, initial_state, z_limit, should_log),
     stepsize_controller=stepsize_controller,
     event=event,
     saveat=diffrax.SaveAt(ts=jnp.linspace(0.0, l_max, 50)),
@@ -150,7 +158,9 @@ def _integrate_geodesic(
 
 
 def get_luminosity_distance(
-  metric_fn: Callable[[jnp.ndarray], jnp.ndarray], z_target: float
+  metric_fn: Callable[[jnp.ndarray], jnp.ndarray],
+  z_target: float,
+  should_log: bool = False,
 ) -> jnp.ndarray:
   """
   Calculates dL(z) by integrating null geodesics backwards from observer.
@@ -174,7 +184,9 @@ def get_luminosity_distance(
   # Limit l_max to unitless coordinate boundary.
   # l=-10.0 corresponds to 10,000 Mpc in physical scale.
   l_max = -10.0
-  sol = _integrate_geodesic(metric_fn, initial_state, l_max, z_limit)
+  sol = _integrate_geodesic(
+    metric_fn, initial_state, l_max, z_limit, should_log=should_log
+  )
 
   # 3. Physical Sampling (Robust against termination)
   # Sample exactly up to the termination point sol.t1.
@@ -187,23 +199,47 @@ def get_luminosity_distance(
     dl_unit = (1.0 + z) * r_prop
     return z, dl_unit
 
-  z_vals, dl_vals = jax.vmap(compute_z_dl)(sol.ys)
+  # Prevent JAX backward pass from evaluating 0.0 * Inf = NaN by masking inputs
+  # first.
+  is_finite_state = jnp.all(jnp.isfinite(sol.ys), axis=-1)
+  safe_ys = jnp.where(is_finite_state[:, None], sol.ys, initial_state)
 
-  max_z_found = z_vals[-1]
+  z_vals, dl_vals = jax.vmap(compute_z_dl)(safe_ys)
+
+  # Safely compute maximums without hitting NaN
+  safe_z_for_max = jnp.where(is_finite_state, z_vals, -1.0)
+  max_z_found = jnp.max(safe_z_for_max)
+
+  # Force invalid entries to plateau at the maximum valid values
+  # This ensures jnp.interp receives a monotonic array and returns the last
+  # valid dl
+  safe_z_vals = jnp.where(is_finite_state, z_vals, max_z_found)
+
+  safe_dl_for_max = jnp.where(is_finite_state, dl_vals, 0.0)
+  max_dl_found = jnp.max(safe_dl_for_max)
+  safe_dl_vals = jnp.where(is_finite_state, dl_vals, max_dl_found)
 
   # Diagnostics
   if os.environ.get("LUMPY_DEBUG") == "1":
-    jax.debug.print("\n--- dL Diagnostics ---")
-    jax.debug.print(
-      "sol.t1: {t1} | sol.result: {res}", t1=sol.t1, res=sol.result
+    jax.lax.cond(
+      should_log,
+      lambda: jax.debug.print(
+        "\n--- dL Diagnostics ---\n"
+        "sol.t1: {t1} | sol.result: {res}\n"
+        "z_target: {z}\nmax_z_found: {zmax}\n"
+        "Final z_vals: {zv}",
+        t1=sol.t1,
+        res=sol.result,
+        z=z_target,
+        zmax=max_z_found,
+        zv=z_vals,
+      ),
+      lambda: None,
     )
-    jax.debug.print("z_target: {z}", z=z_target)
-    jax.debug.print("max_z_found: {z}", z=max_z_found)
-    jax.debug.print("Final z_vals: {z}", z=z_vals)
 
   # 4. Result via interpolation
   # Everything is finite by construction.
-  result = jnp.interp(z_target, z_vals, dl_vals)
+  result = jnp.interp(z_target, safe_z_vals, safe_dl_vals)
 
   # REDSHIFT PENALTY (Optimizer Compass):
   # Drive expansion if target redshift was unreachable.
@@ -213,8 +249,13 @@ def get_luminosity_distance(
   )
 
   if os.environ.get("LUMPY_DEBUG") == "1":
-    jax.debug.print("Interp result: {r}", r=result)
-    jax.debug.print("Penalty: {p}", p=penalty)
+    jax.lax.cond(
+      should_log,
+      lambda: jax.debug.print(
+        "Interp result: {r}\nPenalty: {p}", r=result, p=penalty
+      ),
+      lambda: None,
+    )
 
   # Convert back to physical Mpc
   return (result + penalty) * L_UNIT

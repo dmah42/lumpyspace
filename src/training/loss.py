@@ -51,9 +51,15 @@ def get_data_loss(
 
   Computes the weighted chi-squared statistic.
   """
-  # Vectorize over redshifts
-  v_get_dl = jax.vmap(lambda z: get_luminosity_distance(metric_fn, z))
-  dl_mpc = v_get_dl(redshifts)
+  # To avoid a terminal firehose, we only log diagnostics for the first
+  # supernova in each batch.
+  should_log_batch = jnp.zeros(len(redshifts), dtype=bool).at[0].set(True)
+
+  # Vectorize over redshifts and logging flags
+  v_get_dl = jax.vmap(
+    lambda z, sl: get_luminosity_distance(metric_fn, z, should_log=sl)
+  )
+  dl_mpc = v_get_dl(redshifts, should_log_batch)
 
   # Avoid log10(0) or negative distances
   mu_pred = 5.0 * jnp.log10(jnp.abs(dl_mpc) + 1e-6) + 25.0
