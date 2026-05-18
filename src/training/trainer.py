@@ -37,6 +37,8 @@ def train_model(
   lam: float = 0.7,
   target_loss: float = 1e-6,
   patience: int = 500,
+  kick_period: int = 1000,
+  peak_learning_rate: float = 1e-3,
   log_path: str | None = "logs/training_metrics.csv",
   checkpoint_path: str | None = None,
   key: jax.Array | None = None,
@@ -45,9 +47,23 @@ def train_model(
   Executes the training loop for the PINN.
   Minimizes combined EFE and Data residuals with early stopping and telemetry.
   """
+
+  # Periodic learning rate schedule to continuously kick the model out
+  # of local minima. Decays rapidly, then stays flat at baseline.
+  def lr_schedule(step):
+    cycle_length = kick_period
+    decay_length = cycle_length // 5  # Decay over the first 20% of the cycle
+
+    cycle_step = step % cycle_length
+    progress = jnp.minimum(cycle_step / decay_length, 1.0)
+    cosine_val = 0.5 * (1.0 + jnp.cos(jnp.pi * progress))
+
+    peak_learning_rate = 1e-3
+    return learning_rate + (peak_learning_rate - learning_rate) * cosine_val
+
   # Use gradient clipping to stabilize training
   optimizer = optax.chain(
-    optax.clip_by_global_norm(1.0), optax.adam(learning_rate)
+    optax.clip_by_global_norm(1.0), optax.adam(lr_schedule)
   )
   opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
 
@@ -141,6 +157,9 @@ def train_model(
         best_loss = current_loss
         patience_counter = 0
         if checkpoint_path:
+          print(
+            f"Saving checkpoint with loss {current_loss:.6e} at step {i}..."
+          )
           os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
           eqx.tree_serialise_leaves(checkpoint_path, model)
       else:

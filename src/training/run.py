@@ -16,8 +16,6 @@ from src.training.trainer import train_model
 def run_training(
   max_steps: int = 1000000,
   learning_rate: float = 1e-5,
-  target_loss: float = 1e-6,
-  patience: int = 500,
   checkpoint_path: str = "checkpoints/pinn_metric.eqx",
   log_path: str = "logs/training_metrics.csv",
 ) -> None:
@@ -47,9 +45,8 @@ def run_training(
     data,
     max_steps=max_steps,
     learning_rate=learning_rate,
-    target_loss=target_loss,
-    patience=patience,
     log_path=log_path,
+    kick_period=200,
     checkpoint_path=checkpoint_path,
     key=train_key,
   )

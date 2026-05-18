@@ -69,6 +69,7 @@ $$\mathcal{L}_{Total} = w_P \mathcal{L}_{Physics} + w_D \mathcal{L}_{Data} + w_{
     Computes the residual of $G_{\mu\nu} - 8\pi G T_{\mu\nu} = 0$.
     *   We use `jax.jacfwd(jax.jacrev(metric))` to get the second derivatives for the Ricci scalar.
     *   $T_{\mu\nu}$ is modeled as a perfect fluid $T_{\mu\nu} = (\rho+p)u_\mu u_\nu + p g_{\mu\nu}$.
+    *   **Expansion Prior (Symmetry Breaking):** To prevent the unconstrained network from falling into the mathematically valid "contracting universe" local minimum, we apply a massive `jnp.maximum(0, -H_mean)` penalty. Once the network enters the expanding regime ($H > 0$), this penalty drops strictly to zero.
 2.  **Data Loss ($\mathcal{L}_{Data}$):**
     Requires integrating the geodesic equation for light: $\frac{d^2 x^\mu}{d\lambda^2} + \Gamma^\mu_{\alpha\beta} \frac{dx^\alpha}{d\lambda} \frac{dx^\beta}{d\lambda} = 0$.
     *   We solve this using `Diffrax` to find the luminosity distance $d_L(z)$ and compare against the **Pantheon+** dataset.
@@ -150,7 +151,8 @@ $$\mathcal{L}_{Total} = w_P \mathcal{L}_{Physics} + w_D \mathcal{L}_{Data} + w_{
     *   Load `Pantheon+` Supernovae: $(z_{cmb}, \mu_{obs}, \sigma_\mu)$.
     *   Implement coordinate normalization: Map $z \in [0, 2]$ to $t \in [-1, 1]$.
 *   **Task 4.2: The Global Loss Optimizer**
-    *   Initialize `Optax.adam(learning_rate=1e-4)`.
+    *   **Learning Rate Scheduler:** Implement an `optax.warmup_cosine_decay_schedule` to navigate the rugged Tabula Rasa loss landscape. The schedule must be parameterized (`warmup_steps`, `decay_steps`) to provide a sharp "kick" out of local minima followed by a smooth descent.
+    *   **Optimizer:** Initialize `optax.chain(optax.clip_by_global_norm(1.0), optax.adam(lr_schedule))`.
     *   **The Training Loop:**
         1.  Sample $10,000$ random points $(t,x,y,z)$ for $\mathcal{L}_{Physics}$.
         2.  Compute $G_{\mu\nu}$ at these points. Minimize $\|G_{\mu\nu}\|^2$ (assuming vacuum/dust).
