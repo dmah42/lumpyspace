@@ -65,10 +65,15 @@ distance-redshift relationships without assuming a perfectly smooth background.
   Schwarzschild vacuum.
 - [x] **Phase 3: Geodesic Integration** - JIT-accelerated ray-tracing verified
   against EdS solutions.
-- [ ] **Phase 4: Full Bianchi Training** - Ingestion of Pantheon+ Supernovae
+- [x] **Phase 4: Full Bianchi Training** - Ingestion of Pantheon+ Supernovae
   data and discovery of inhomogeneous solutions.
-- [ ] **Phase 5: Analysis** - Extraction of effective $H_0$ and $q_0$ from the
+- [x] **Phase 5: Analysis** - Extraction of effective $H_0$ and $q_0$ from the
   discovered metrics.
+- [ ] **Phase 6+: Improvements** - Iterating on the model and the training
+  approach to improve results.
+
+## Blog posts
+- [https://hamon.dev/blog/lumpyspace](https://hamon.dev/blog/lumpyspace/)
 
 ## Getting Started
 
