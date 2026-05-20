@@ -34,7 +34,6 @@ def train_model(
   data: tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray],
   max_steps: int = 10000,
   learning_rate: float = 1e-4,
-  lam: float = 0.7,
   target_loss: float = 1e-6,
   patience: int = 500,
   kick_period: int = 1000,
@@ -80,7 +79,7 @@ def train_model(
   ) -> tuple[eqx.Module, optax.OptState, jnp.ndarray, dict[str, jnp.ndarray]]:
     def loss_fn(model):
       # 1. Physics Loss (EFE residuals)
-      v_efe_loss = jax.vmap(lambda c: get_efe_loss(model, c, lam=lam))
+      v_efe_loss = jax.vmap(lambda c: get_efe_loss(model, c))
       l_phys = jnp.mean(v_efe_loss(coords))
 
       # 2. Data Loss (Supernova chi-squared)

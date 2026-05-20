@@ -49,7 +49,6 @@ def test_control_training_loop() -> None:
     subset_data,
     max_steps=5,
     learning_rate=1e-4,
-    lam=0.7,
     key=train_key,
     log_path=None,
   )

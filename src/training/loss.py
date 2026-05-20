@@ -2,7 +2,7 @@
 Loss functions for the FLRW control baseline.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 import jax
 import jax.numpy as jnp
@@ -14,13 +14,12 @@ from src.physics.geodesics import get_luminosity_distance
 def get_efe_loss(
   metric_fn: Callable[[jnp.ndarray], jnp.ndarray],
   coords: jnp.ndarray,
-  lam: float = 0.7,
 ) -> jnp.ndarray:
   """
   Computes the residual of the Einstein Field Equations:
-  G_mu_nu + Lambda * g_mu_nu - 8*pi*G * T_mu_nu = 0
+  G_mu_nu - 8*pi*G * T_mu_nu = 0
 
-  For the FLRW control, we assume a vacuum + Lambda or perfect fluid.
+  For the FLRW control, we assume a vacuum or perfect fluid.
   Here we minimize the Einstein Tensor residual directly.
   """
   g = metric_fn(coords)
@@ -30,10 +29,10 @@ def get_efe_loss(
   # Einstein Tensor G_mu_nu = R_mu_nu - 0.5 * R * g_mu_nu
   g_mu_nu = r_mu_nu - 0.5 * r_scalar * g
 
-  # Physics Residual with Cosmological Constant Lambda
-  # residual = G_mu_nu + Lambda * g_mu_nu
+  # Physics Residual
+  # residual = G_mu_nu
   # (Ignoring T_mu_nu for the simplest control baseline)
-  residual = g_mu_nu + lam * g
+  residual = g_mu_nu
 
   return jnp.mean(jnp.square(residual))
 
