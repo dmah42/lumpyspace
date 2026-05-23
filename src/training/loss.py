@@ -8,7 +8,9 @@ import jax
 import jax.numpy as jnp
 
 from src.core.tensors import get_ricci_scalar, get_ricci_tensor
-from src.physics.geodesics import get_luminosity_distance
+from src.physics.geodesics import get_bao_distances, get_luminosity_distance
+
+PLANCK_RD_MPC = 147.09
 
 
 def get_efe_loss(
@@ -65,3 +67,47 @@ def get_data_loss(
 
   # Weighted Chi-Squared: mean( ((pred - obs) / err)^2 )
   return jnp.mean(jnp.square((mu_pred - target_mu) / mu_err))
+
+
+def get_bao_loss(
+  metric_fn: Callable[[jnp.ndarray], jnp.ndarray],
+  z_vals: jnp.ndarray,
+  dm_obs: jnp.ndarray,
+  dh_obs: jnp.ndarray,
+  cov_invs: jnp.ndarray,
+) -> jnp.ndarray:
+  """
+  Data loss against 3D BAO distance measurements.
+
+  Computes the chi-squared statistic using Transverse (D_M) and Radial (D_H)
+  distances, weighted by the full inverted covariance matrix.
+  """
+  # We hardcode the standard Planck sound horizon (r_d) as justified
+  # in the technical specs
+  r_d = PLANCK_RD_MPC
+
+  # To avoid a terminal firehose, log diagnostics for only the first
+  # BAO data point in the batch
+  should_log_batch = jnp.zeros(len(z_vals), dtype=bool).at[0].set(True)
+
+  v_get_bao = jax.vmap(
+    lambda z, sl: get_bao_distances(metric_fn, z, should_log=sl)
+  )
+
+  # Predict physical distances
+  dm_pred, dh_pred = v_get_bao(z_vals, should_log_batch)
+
+  # Convert predictions to the observational ratio (D / r_d)
+  dm_ratio = dm_pred / r_d
+  dh_ratio = dh_pred / r_d
+
+  def compute_chi2(dm_p, dh_p, dm_o, dh_o, c_inv):
+    # Delta vector: [D_M - D_M_obs, D_H - D_H_obs]
+    delta = jnp.array([dm_p - dm_o, dh_p - dh_o])
+    # Chi-squared: delta^T * C^{-1} * delta
+    return jnp.einsum("i,ij,j->", delta, c_inv, delta)
+
+  v_compute_chi2 = jax.vmap(compute_chi2)
+  chi2_vals = v_compute_chi2(dm_ratio, dh_ratio, dm_obs, dh_obs, cov_invs)
+
+  return jnp.mean(chi2_vals)
