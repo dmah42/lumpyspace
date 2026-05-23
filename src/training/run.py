@@ -6,10 +6,9 @@ import os
 
 import equinox as eqx
 import jax
-import jax.numpy as jnp
 
 from src.core.metric import MetricNN
-from src.training.data import load_pantheon_plus
+from src.training.data import load_bao_data, load_pantheon_plus
 from src.training.trainer import train_model
 
 
@@ -29,11 +28,19 @@ def run_training(
   # 2. Load Real Data
   print("Loading Pantheon+ Supernova dataset...")
   try:
-    # load_pantheon_plus returns (z, mu, mu_err)
-    data: tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray] = load_pantheon_plus()
+    sn_data = load_pantheon_plus()
   except FileNotFoundError:
     print("Error: Pantheon+ data not found. Run scripts/download_pantheon.py.")
     return
+
+  print("Loading SDSS DR12 BAO dataset...")
+  try:
+    bao_data = load_bao_data()
+  except FileNotFoundError:
+    print("Error: BAO data not found. Run scripts/generate_bao_data.py.")
+    return
+
+  combined_data = (sn_data, bao_data)
 
   # 3. Initialize Model
   print("Initializing 4D Metric PINN...")
@@ -42,7 +49,7 @@ def run_training(
   # 4. Run Training
   trained_model = train_model(
     model,
-    data,
+    combined_data,
     max_steps=max_steps,
     learning_rate=learning_rate,
     log_path=log_path,

@@ -11,7 +11,7 @@ import jax
 import jax.numpy as jnp
 import optax
 
-from src.training.loss import get_data_loss, get_efe_loss
+from src.training.loss import get_bao_loss, get_data_loss, get_efe_loss
 
 
 @contextmanager
@@ -23,7 +23,7 @@ def _get_log_writer(log_path: str | None):
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     with open(log_path, mode="w", newline="") as log_file:
       log_writer = csv.DictWriter(
-        log_file, fieldnames=["step", "loss", "l_phys", "l_data"]
+        log_file, fieldnames=["step", "loss", "l_phys", "l_sn", "l_bao"]
       )
       log_writer.writeheader()
       yield log_writer, log_file
@@ -31,7 +31,10 @@ def _get_log_writer(log_path: str | None):
 
 def train_model(
   model: eqx.Module,
-  data: tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray],
+  data: tuple[
+    tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray],
+    tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray],
+  ],
   max_steps: int = 10000,
   learning_rate: float = 1e-4,
   target_loss: float = 1e-6,
@@ -41,6 +44,8 @@ def train_model(
   log_path: str | None = "logs/training_metrics.csv",
   checkpoint_path: str | None = None,
   key: jax.Array | None = None,
+  w_sn: float = 10.0,
+  w_bao: float = 1.0,
 ) -> eqx.Module:
   """
   Executes the training loop for the PINN.
@@ -66,16 +71,22 @@ def train_model(
   )
   opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
 
-  redshifts, target_mu, mu_err = data
+  sn_data, bao_data = data
+  sn_z, sn_mu, sn_err = sn_data
+  bao_z, bao_dm, bao_dh, bao_cov = bao_data
 
   @eqx.filter_jit
   def step(
     model: eqx.Module,
     opt_state: optax.OptState,
     coords: jnp.ndarray,
-    redshifts: jnp.ndarray,
-    target_mu: jnp.ndarray,
-    mu_err: jnp.ndarray,
+    sn_z: jnp.ndarray,
+    sn_mu: jnp.ndarray,
+    sn_err: jnp.ndarray,
+    bao_z: jnp.ndarray,
+    bao_dm: jnp.ndarray,
+    bao_dh: jnp.ndarray,
+    bao_cov: jnp.ndarray,
   ) -> tuple[eqx.Module, optax.OptState, jnp.ndarray, dict[str, jnp.ndarray]]:
     def loss_fn(model):
       # 1. Physics Loss (EFE residuals)
@@ -83,13 +94,17 @@ def train_model(
       l_phys = jnp.mean(v_efe_loss(coords))
 
       # 2. Data Loss (Supernova chi-squared)
-      l_data = get_data_loss(model, redshifts, target_mu, mu_err)
+      l_sn = get_data_loss(model, sn_z, sn_mu, sn_err)
 
-      total_loss = l_phys + 10.0 * l_data
+      # 3. BAO Loss (3D Chi-squared)
+      l_bao = get_bao_loss(model, bao_z, bao_dm, bao_dh, bao_cov)
+
+      total_loss = l_phys + w_sn * l_sn + w_bao * l_bao
       return total_loss, {
         "loss": total_loss,
         "l_phys": l_phys,
-        "l_data": l_data,
+        "l_sn": l_sn,
+        "l_bao": l_bao,
       }
 
     (loss, metrics), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(
@@ -120,7 +135,16 @@ def train_model(
       coords = jnp.concatenate([t_coords, spatial_coords], axis=1)
 
       model, opt_state, _, metrics = step(
-        model, opt_state, coords, redshifts, target_mu, mu_err
+        model,
+        opt_state,
+        coords,
+        sn_z,
+        sn_mu,
+        sn_err,
+        bao_z,
+        bao_dm,
+        bao_dh,
+        bao_cov,
       )
 
       current_loss = float(metrics["loss"])
@@ -133,7 +157,8 @@ def train_model(
             "step": i,
             "loss": f"{current_loss:.6e}",
             "l_phys": f"{float(metrics['l_phys']):.6e}",
-            "l_data": f"{float(metrics['l_data']):.6e}",
+            "l_sn": f"{float(metrics['l_sn']):.6e}",
+            "l_bao": f"{float(metrics['l_bao']):.6e}",
           }
         )
         log_file.flush()

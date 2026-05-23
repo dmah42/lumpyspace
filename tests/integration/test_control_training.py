@@ -3,6 +3,7 @@ Integration test for the training loop using mock data.
 """
 
 import jax
+import jax.numpy as jnp
 
 from src.core.metric import MetricNN
 from src.training.data import load_mock_data
@@ -34,10 +35,21 @@ def test_control_training_loop() -> None:
   key = jax.random.PRNGKey(42)
   model_key, train_key = jax.random.split(key)
 
-  # 1. Load Mock Data (z, mu, mu_err)
-  data = load_mock_data()
+  # 1. Load Mock Data
+  sn_data = load_mock_data()
   # Use a smaller subset for fast integration test
-  subset_data = (data[0][:5], data[1][:5], data[2][:5])
+  subset_sn = (sn_data[0][:5], sn_data[1][:5], sn_data[2][:5])
+
+  # Create a dummy mock BAO dataset: (z, dm, dh, cov_inv)
+  # We just need it to run without shape errors.
+  # Shape expected: z (1,), dm (1,), dh (1,), cov_inv (1, 2, 2)
+  mock_bao_z = jnp.array([0.5])
+  mock_bao_dm = jnp.array([10.0])
+  mock_bao_dh = jnp.array([20.0])
+  mock_bao_cov_inv = jnp.array([[[1.0, 0.0], [0.0, 1.0]]])
+  subset_bao = (mock_bao_z, mock_bao_dm, mock_bao_dh, mock_bao_cov_inv)
+
+  combined_data = (subset_sn, subset_bao)
 
   # 2. Initialize Model
   model = MetricNN(model_key)
@@ -46,7 +58,7 @@ def test_control_training_loop() -> None:
   print("\nStarting control training test with mock data...")
   trained_model = train_model(
     model,
-    subset_data,
+    combined_data,
     max_steps=5,
     learning_rate=1e-4,
     key=train_key,
