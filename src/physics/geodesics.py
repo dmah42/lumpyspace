@@ -3,7 +3,7 @@ Null geodesic equations for ray-tracing in arbitrary metrics.
 """
 
 import os
-from typing import Any, Callable, Tuple
+from typing import Any, Callable
 
 import diffrax
 import equinox as eqx
@@ -11,15 +11,18 @@ import jax
 import jax.numpy as jnp
 
 # PHYSICAL SCALE:
+# PHYSICAL SCALE:
 # To maintain numerical stability in the PINN, we use dimensionless
 # coordinates where 1.0 unit = 1000 Mpc. This ensures the solver
 # stays within the network's stable domain while light travels
 # cosmological distances.
 L_UNIT = 1000.0
+# We integrate null geodesics backwards out to 10,000 Mpc
+L_MAX = -10000.0 / L_UNIT
 
 
 def geodesic_system(
-  affine_param: jnp.ndarray, state: jnp.ndarray, args: Tuple[Any, ...]
+  affine_param: jnp.ndarray, state: jnp.ndarray, args: tuple[Any, ...]
 ) -> jnp.ndarray:
   """
   Defines the first-order ODE system for geodesics:
@@ -90,7 +93,7 @@ def get_redshift(
 
 
 def _check_redshift_termination(
-  t: jnp.ndarray, state: jnp.ndarray, args: Tuple[Any, ...], **kwargs
+  t: jnp.ndarray, state: jnp.ndarray, args: tuple[Any, ...], **kwargs
 ) -> jnp.ndarray:
   metric_fn, _, initial_state, z_limit, should_log = args
   # Terminate if state becomes non-finite (NaN or Inf)
@@ -181,11 +184,8 @@ def get_luminosity_distance(
   # 2. Integrate
   # Use a safety margin for redshift termination
   z_limit = jnp.maximum(2.5, z_target + 0.2)
-  # Limit l_max to unitless coordinate boundary.
-  # l=-10.0 corresponds to 10,000 Mpc in physical scale.
-  l_max = -10.0
   sol = _integrate_geodesic(
-    metric_fn, initial_state, l_max, z_limit, should_log=should_log
+    metric_fn, initial_state, L_MAX, z_limit, should_log=should_log
   )
 
   # 3. Physical Sampling (Robust against termination)
@@ -259,3 +259,98 @@ def get_luminosity_distance(
 
   # Convert back to physical Mpc
   return (result + penalty) * L_UNIT
+
+
+def get_bao_distances(
+  metric_fn: Callable[[jnp.ndarray], jnp.ndarray],
+  z_target: float,
+  should_log: bool = False,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+  """
+  Calculates the BAO Transverse (D_M) and Radial (D_H) distances in Mpc.
+  To account for anisotropy, it shoots rays along the 3 principal spatial axes
+  and returns the angular average.
+  """
+  # 1. Setup Observer at t=1.0 (Present day)
+  obs_coords = jnp.array([1.0, 0.0, 0.0, 0.0])
+  g_obs = metric_fn(obs_coords)
+  kt = 1.0
+
+  def shoot_ray(axis_idx):
+    k_spatial = kt * jnp.sqrt(
+      jnp.abs(g_obs[0, 0]) / jnp.abs(g_obs[axis_idx + 1, axis_idx + 1]) + 1e-9
+    )
+    initial_k = jnp.zeros(4)
+    initial_k = initial_k.at[0].set(kt)
+    initial_k = initial_k.at[axis_idx + 1].set(k_spatial)
+
+    initial_state = jnp.concatenate([obs_coords, initial_k])
+
+    # 2. Integrate backwards
+    z_limit = jnp.maximum(2.5, z_target + 0.2)
+    sol = _integrate_geodesic(
+      metric_fn, initial_state, L_MAX, z_limit, should_log=should_log
+    )
+
+    # 3. Find Transverse Distance (D_M)
+    def compute_z_dm(state):
+      z = get_redshift(metric_fn, initial_state, state) - 1.0
+      # D_M = r_prop for null geodesics in code units
+      r_prop = jnp.sqrt(jnp.sum(jnp.square(state[1:4])) + 1e-9)
+      return z, r_prop
+
+    is_finite_state = jnp.all(jnp.isfinite(sol.ys), axis=-1)
+    safe_ys = jnp.where(is_finite_state[:, None], sol.ys, initial_state)
+    z_vals, dm_vals = jax.vmap(compute_z_dm)(safe_ys)
+
+    safe_z_for_max = jnp.where(is_finite_state, z_vals, -1.0)
+    max_z_found = jnp.max(safe_z_for_max)
+    safe_z_vals = jnp.where(is_finite_state, z_vals, max_z_found)
+
+    safe_dm_for_max = jnp.where(is_finite_state, dm_vals, 0.0)
+    max_dm_found = jnp.max(safe_dm_for_max)
+    safe_dm_vals = jnp.where(is_finite_state, dm_vals, max_dm_found)
+
+    dm_unit = jnp.interp(z_target, safe_z_vals, safe_dm_vals)
+
+    # 4. Find Radial Distance (D_H) at the target point
+    t_vals = safe_ys[:, 0]
+    t_target = jnp.interp(z_target, safe_z_vals, t_vals)
+
+    coords_target = jnp.array([t_target, 0.0, 0.0, 0.0])
+    g_target = metric_fn(coords_target)
+    g_spatial = g_target[1:4, 1:4]
+    g_spatial_inv = jnp.linalg.inv(g_spatial)
+
+    dg_dt = jax.jacfwd(metric_fn)(coords_target)[:, :, 0]
+    dg_spatial_dt = dg_dt[1:4, 1:4]
+
+    # H_tensor with respect to coordinate time
+    h_tensor = 0.5 * jnp.matmul(g_spatial_inv, dg_spatial_dt)
+
+    # Convert to proper time (physical expansion rate)
+    u0 = jnp.sqrt(jnp.abs(g_target[0, 0]) + 1e-9)
+    h_tensor_phys = h_tensor / u0
+
+    # Directional Hubble parameter
+    h_dir = h_tensor_phys[axis_idx, axis_idx]
+
+    # D_H = 1 / H(z) in code units
+    dh_unit = 1.0 / (jnp.abs(h_dir) + 1e-9)
+
+    # Apply penalty if target z was unreachable
+    penalty = jnp.where(
+      max_z_found < z_target, 10 * (z_target - max_z_found), 0.0
+    )
+
+    return dm_unit + penalty, dh_unit + penalty
+
+  # Shoot rays along the 3 principal axes
+  dm_x, dh_x = shoot_ray(0)
+  dm_y, dh_y = shoot_ray(1)
+  dm_z, dh_z = shoot_ray(2)
+
+  dm_mean = (dm_x + dm_y + dm_z) / 3.0
+  dh_mean = (dh_x + dh_y + dh_z) / 3.0
+
+  return dm_mean * L_UNIT, dh_mean * L_UNIT

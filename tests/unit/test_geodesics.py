@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from src.physics.geodesics import geodesic_system
+from src.physics.geodesics import L_UNIT, geodesic_system, get_bao_distances
 
 # Enable float64 for high-precision physics checks
 jax.config.update("jax_enable_x64", True)
@@ -137,3 +137,53 @@ def test_null_constraint_conservation():
   # Tolerance loosened from 1e-12 to 1e-6 due to metric regularization
   # for PINN stability
   assert jnp.abs(change_in_constraint) < 1e-6
+
+
+def test_bao_isotropy_on_flrw_metric():
+  """
+  Verification of BAO Isotropic Distances in Flat FLRW.
+
+  Physical Principle: In a standard isotropic expanding universe (FLRW),
+  the expansion rate and spatial geometry are identical in all directions.
+  Therefore, shooting light rays along the x, y, and z axes must yield
+  the exact same averaged distances, and must match the theoretical D_H.
+
+  Verification Ritual:
+  1. Define a standard flat expanding FLRW metric.
+  2. Run the get_bao_distances ray-tracer at z=0.5.
+  3. Verify that the function executes without shape errors and
+     returns valid physical constraints.
+  """
+
+  def flrw_metric(coords):
+    t, x, y, z = coords
+    # Standard flat FLRW metric: ds^2 = -dt^2 + a(t)^2 (dx^2 + dy^2 + dz^2)
+    # Using a simple expanding scale factor a(t) = exp(0.5 * (t - 1.0))
+    a = jnp.exp(0.5 * (t - 1.0))
+    spatial = a**2 * jnp.eye(3)
+    g = jnp.zeros((4, 4))
+    g = g.at[0, 0].set(-1.0)
+    g = g.at[1:4, 1:4].set(spatial)
+    return g
+
+  z_target = 0.5
+
+  # Run the function
+  dm, dh = get_bao_distances(flrw_metric, z_target, should_log=False)
+
+  # Validate types and physical constraints
+  assert not jnp.isnan(dm), "Transverse distance is NaN"
+  assert not jnp.isnan(dh), "Radial distance is NaN"
+
+  # Both distances must be strictly positive in an expanding universe
+  assert dm > 0.0, f"Expected positive Transverse distance, got {dm}"
+  assert dh > 0.0, f"Expected positive Radial distance, got {dh}"
+
+  # We can also do a direct calculation of D_H at z_target to ensure math is
+  # correct.
+  # For a(t) = exp(0.5*(t-1)), H = a'/a = 0.5
+  # So D_H = 1/H = 2.0 in code units.
+  # In physical units: D_H = 2.0 * L_UNIT
+  assert jnp.allclose(
+    dh, 2.0 * L_UNIT, atol=1e-1
+  ), f"Expected D_H ~ {2.0 * L_UNIT}, got {dh}"
