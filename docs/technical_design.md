@@ -166,18 +166,31 @@ $$\mathcal{L}_{Total} = w_P \mathcal{L}_{Physics} + w_D \mathcal{L}_{Data} + w_{
         *   Extract the **Hubble Tensor** $H_{ij}$ and compare expansion rates along the x, y, and z axes.
         *   Generate the final **Hubble Diagram** showing the Pantheon+ fit, CC residuals, and shear evolution.
     *   **Success Criterion:** Identification of the primary expansion axis and its alignment with known cosmological structures (e.g., CMB dipole).
-*   **Task 4.4: Out-of-Sample Validation (Cosmic Chronometers)**
-    *   **Goal:** Verify the PINN-learned expansion history against independent, non-distance-ladder measurements.
-    *   **Implementation:**
-        *   Ingest the 32-point **Cosmic Chronometers** $H(z)$ dataset.
-        *   Extract $H(z)$ directly from the learned metric using $H(z) = -\frac{1}{1+z}\frac{dz}{dt}$.
-        *   Compute the residuals and $\chi^2$ against the CC data without further training.
-    *   **Success Criterion:** The PINN model must achieve a reduced $\chi^2 \approx 1$ against the independent CC dataset.
+*   **Task 4.4: Out-of-Sample Validation & The "Hubble Dipole" (Cosmic Chronometers)**
+    *   **Goal:** Verify the PINN-learned expansion history against independent, non-distance-ladder measurements, while accounting for the model's extreme spatial anisotropy.
+    *   **Implementation (Future Plan):**
+        *   *The Anisotropy Problem:* The standard 32-point Cosmic Chronometers dataset assumes isotropy by averaging $H(z)$ across all sky coordinates. Since our Tabula Rasa PINN predicts a universe expanding significantly faster along a preferred axis (mimicking Dark Energy via shear), testing against a 1D $H(z)$ curve would erase the very physics we discovered.
+        *   *The 3D Solution:* We must ingest the full CC dataset *including* the Right Ascension (RA) and Declination (Dec) of each galaxy. We will then shoot 3D null geodesics in those exact angular directions to extract the strictly directional expansion rate $H_{dir}(z) = -\frac{1}{1+z}\frac{dz}{d\tau}$ for each specific data point.
+    *   **Success Criterion:** If the highly anisotropic model fits the directional CC data better than a standard isotropic $\Lambda$CDM model, it provides strong observational evidence for the "Hubble Dipole" and anisotropic Dark Energy.
+
 *   **Task 4.5: Model Selection & Final Synthesis**
     *   **Goal:** Statistically determine if the inhomogeneous model is superior to $\Lambda$CDM.
     *   **Implementation:**
         *   Compute the **AIC (Akaike Information Criterion)** and **BIC (Bayesian Information Criterion)** for both the PINN and a standard FLRW fit.
     *   **Success Criterion:** Final determination of whether the data statistically justifies a "lumpy" universe over a smooth one.
+
+*   **Task 4.6: Future Directions & Additional Observational Probes**
+    *   *Baryon Acoustic Oscillations (BAO):* BAO provides an absolute distance scale (standard ruler) derived from the physics of the early universe plasma. Fitting the PINN against 3D BAO measurements (transverse vs. line-of-sight) would be the ultimate test of anisotropic geometry, as BAO measurements are highly sensitive to directional expansion.
+    *   *CMB Temperature Power Spectrum:* Mapping our 4D metric fluctuations to the CMB angular power spectrum to ensure the late-time shear does not violate the high-redshift isotropy of the CMB ($z \approx 1100$).
+    *   *Local Density Backreaction (Lemaître-Tolman-Bondi):* Relaxing the Bianchi Type I symmetry to allow for full radial inhomogeneity. We can test if we live inside a massive local void, where negative spatial curvature acts as an effective repulsive force (mimicking $\Lambda$).
+
+*   **Task 4.7: Automated Hyperparameter Optimization (Gradient Balancing)**
+    *   **Goal:** Automate the tuning of the multi-probe loss weights ($w_{sn}$, $w_{bao}$) to prevent the physics loss ($G_{\mu\nu}=0$) and data losses from overwhelming each other.
+    *   **Implementation Options:**
+        1.  **Bayesian Optimization (Optuna/Ray Tune):** Wrapping the training loop in an external framework to run dozens of trials, hunting for the optimal static weights that minimize validation loss.
+            *   *Tradeoffs:* Highly robust and guaranteed to find stable static weights. However, it is computationally expensive (requires running the full PINN training loop dozens of times) and uses static weights that cannot adapt if the loss landscape changes drastically during training.
+        2.  **Self-Adaptive Loss Weights (The PINN Approach):** Making the weights ($w_{sn}$, $w_{bao}$) learnable parameters within the JAX/Equinox model itself. The loss function is modified to simultaneously minimize the residuals while maximizing the weights (e.g., $\mathcal{L} = \sum \frac{1}{2 w_i^2} \mathcal{L}_i + \log(w_i)$), allowing the optimizer to dynamically balance the gradients at every step.
+            *   *Tradeoffs:* Computationally cheap (only requires a single training run) and dynamically adapts to the rugged loss landscape in real-time. However, it can be numerically unstable and requires careful initialization to prevent the optimizer from exploiting the weights to artificially zero out the loss.
 
 ---
 
