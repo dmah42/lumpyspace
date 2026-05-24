@@ -60,6 +60,9 @@ def test_efe_loss_minkowski():
   def minkowski_metric(coords):
     return jnp.diag(jnp.array([-1.0, 1.0, 1.0, 1.0]))
 
+  # Minkowski is a vacuum solution, so matter density must be 0
+  minkowski_metric.kappa_rho_0 = jnp.array([0.0])
+
   # Evaluate at an arbitrary coordinate point
   coords = jnp.array([0.5, 0.0, 0.0, 0.0])
 

@@ -23,7 +23,8 @@ def _get_log_writer(log_path: str | None):
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     with open(log_path, mode="w", newline="") as log_file:
       log_writer = csv.DictWriter(
-        log_file, fieldnames=["step", "loss", "l_phys", "l_sn", "l_bao"]
+        log_file,
+        fieldnames=["step", "loss", "l_phys", "l_sn", "l_bao", "kappa_rho_0"],
       )
       log_writer.writeheader()
       yield log_writer, log_file
@@ -44,8 +45,9 @@ def train_model(
   log_path: str | None = "logs/training_metrics.csv",
   checkpoint_path: str | None = None,
   key: jax.Array | None = None,
+  w_efe: float = 1.0,
   w_sn: float = 10.0,
-  w_bao: float = 1.0,
+  w_bao: float = 0.5,
 ) -> eqx.Module:
   """
   Executes the training loop for the PINN.
@@ -99,12 +101,13 @@ def train_model(
       # 3. BAO Loss (3D Chi-squared)
       l_bao = get_bao_loss(model, bao_z, bao_dm, bao_dh, bao_cov)
 
-      total_loss = l_phys + w_sn * l_sn + w_bao * l_bao
+      total_loss = w_efe * l_phys + w_sn * l_sn + w_bao * l_bao
       return total_loss, {
         "loss": total_loss,
         "l_phys": l_phys,
         "l_sn": l_sn,
         "l_bao": l_bao,
+        "kappa_rho_0": model.kappa_rho_0[0],
       }
 
     (loss, metrics), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(
@@ -159,6 +162,7 @@ def train_model(
             "l_phys": f"{float(metrics['l_phys']):.6e}",
             "l_sn": f"{float(metrics['l_sn']):.6e}",
             "l_bao": f"{float(metrics['l_bao']):.6e}",
+            "kappa_rho_0": f"{float(metrics['kappa_rho_0']):.6e}",
           }
         )
         log_file.flush()

@@ -2,9 +2,6 @@
 Execution entry point for production training on Pantheon+ data.
 """
 
-import os
-
-import equinox as eqx
 import jax
 
 from src.core.metric import MetricNN
@@ -47,7 +44,7 @@ def run_training(
   model = MetricNN(model_key)
 
   # 4. Run Training
-  trained_model = train_model(
+  train_model(
     model,
     combined_data,
     max_steps=max_steps,
@@ -59,10 +56,8 @@ def run_training(
     key=train_key,
   )
 
-  # 5. Save Model Checkpoint
-  os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
-  eqx.tree_serialise_leaves(checkpoint_path, trained_model)
-  print(f"Training session concluded. Model saved to {checkpoint_path}")
+  # 5. Training Complete
+  print(f"Training session concluded. Best model is saved at {checkpoint_path}")
 
 
 if __name__ == "__main__":

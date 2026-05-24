@@ -194,8 +194,49 @@ $$\mathcal{L}_{Total} = w_P \mathcal{L}_{Physics} + w_D \mathcal{L}_{Data} + w_{
 
 ---
 
-## 6. Testing & Validation
+## 6. Advanced Training Dynamics: Batching & Gradient Balancing
+
+To transition the PINN training loop from a prototype to a production-grade optimization engine, we must address the computational complexity of the data loss and the inherent competition between the physics and observational objectives.
+
+### 6.1 Supernova Batching Design
+Rather than evaluating all $1,701$ supernovae in the Pantheon+ dataset at each training step—which requires solving $1,701$ separate null geodesic ODEs backwards through time—we introduce stochastic batching of the observational data.
+
+*   **JAX-Compatible Sampling:** We define a static batch size $B$ (e.g., $B = 128$). At each step, we use `jax.random.choice` to sample $B$ indices from the dataset. By keeping the batch size constant, JAX's compilation engine (XLA) avoids recompilation.
+*   **The Stochastic Gradient Advantage:** Evaluating a subset of geodesics introduces stochastic noise into the observational loss gradient $\nabla_\theta \mathcal{L}_{Data}$. While this noise requires a slightly smaller base learning rate, it acts as a regularizer. The resulting "gradient thermal bath" helps the network parameters jump out of the shallow local minima and coordinate traps that characterize the unconstrained 10-dimensional metric landscape.
+*   **Implementation Details:**
+    *   `batch_z, batch_mu, batch_err = select_batch(sn_data, indices)`
+    *   The loss is normalized by the batch size $B$ to maintain consistent gradient scaling across different choices of $B$.
+
+### 6.2 Hyperparameter Tuning & Gradient Balancing
+Physics-Informed Neural Networks often fail when the gradients of the physics loss ($\mathcal{L}_{Physics}$) and the data loss ($\mathcal{L}_{Data}$) have vastly different magnitudes. If one dominates, the optimizer will satisfy it at the absolute expense of the other.
+
+#### 6.2.1 Biasing Towards Physics (The Cosmological Constraint)
+Because a metric that fits the supernova data but violates Einstein's Field Equations is physically meaningless, we must bias the optimization toward satisfying General Relativity. However, if the physics loss weight $w_{Physics}$ is set too high, the model quickly collapses into the trivial vacuum Minkowski metric (which has exactly zero curvature and zero physics loss) and refuses to ever move toward fitting the expansion of the universe.
+To prevent this, we propose two methods:
+
+#### 6.2.2 Option 1: Dynamic GradNorm (Gradient Norm Balancing)
+We dynamically adjust the loss weights $w_i(t)$ at each training step $t$ to ensure the gradients of the physics and data losses remain in a physical proportion.
+*   **The Algorithm:**
+    1.  At step $t$, compute the gradients of the model's final layer parameters with respect to each individual loss component: $G_{phys}(t) = \|\nabla_{\theta_{last}} (w_{phys} \mathcal{L}_{phys})\|_2$ and $G_{data}(t) = \|\nabla_{\theta_{last}} (w_{data} \mathcal{L}_{data})\|_2$.
+    2.  Define a target ratio $\alpha$ (e.g., $\alpha = 10.0$ to bias the optimizer towards physics).
+    3.  Compute the desired weight updates to bring the gradient ratio close to $\alpha$:
+        $$w_{phys}(t+1) = (1 - \beta) w_{phys}(t) + \beta \left( \alpha \frac{\bar{G}(t)}{G_{phys}(t)} \right)$$
+        where $\bar{G}(t)$ is the mean gradient norm, and $\beta$ is a momentum hyperparameter (e.g., $0.1$).
+*   **Tradeoffs:** Automatically prevents either loss from "drowning out" the other, stabilizing training across the entire 10,000-step cycle. However, computing separate gradients for each loss component adds slight backpropagation overhead.
+
+#### 6.2.3 Option 2: Augmented Lagrangian (Hard Boundary Constraints)
+We reformulate the training as a constrained optimization problem, treating the Einstein Field Equations as a hard constraint:
+$$\min_{\theta} \mathcal{L}_{Data}(\theta) \quad \text{subject to} \quad \mathcal{L}_{Physics}(\theta) \le \epsilon$$
+We optimize the Augmented Lagrangian:
+$$\mathcal{L}_{Aug}(\theta, \lambda) = \mathcal{L}_{Data}(\theta) + \lambda \mathcal{L}_{Physics}(\theta) + \frac{\mu}{2} \mathcal{L}_{Physics}(\theta)^2$$
+Where:
+*   $\lambda$ is the Lagrange multiplier, updated after every epoch/batch step: $\lambda \leftarrow \lambda + \mu \mathcal{L}_{Physics}(\theta)$.
+*   $\mu$ is the penalty parameter, which increases over training to penalize constraint violations more severely.
+*   **Tradeoffs:** Guarantees that the final converged metric strictly satisfies General Relativity. However, it requires careful tuning of $\mu$'s growth rate to prevent numerical instability.
+
+---
+
+## 7. Testing & Validation
 *   **Unit Tests:** Verify $g_{\mu\nu}$ symmetry and signature.
 *   **Symmetry Tests:** Check if the learned metric respects the requested Bianchi Type I spatial symmetries.
 *   **Performance:** Benchmark training speed. The RTX 5070 must handle $\sim 10^5$ collocation points per minute.
- minute.

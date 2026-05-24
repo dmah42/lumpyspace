@@ -7,7 +7,7 @@ from collections.abc import Callable
 import jax
 import jax.numpy as jnp
 
-from src.core.tensors import get_ricci_scalar, get_ricci_tensor
+from src.core.tensors import get_ricci_tensor
 from src.physics.geodesics import get_bao_distances, get_luminosity_distance
 
 PLANCK_RD_MPC = 147.09
@@ -25,16 +25,32 @@ def get_efe_loss(
   Here we minimize the Einstein Tensor residual directly.
   """
   g = metric_fn(coords)
+  g_inv = jnp.linalg.inv(g)
   r_mu_nu = get_ricci_tensor(metric_fn, coords)
-  r_scalar = get_ricci_scalar(metric_fn, coords)
+  r_scalar = jnp.einsum("mn,mn->", g_inv, r_mu_nu)
 
   # Einstein Tensor G_mu_nu = R_mu_nu - 0.5 * R * g_mu_nu
   g_mu_nu = r_mu_nu - 0.5 * r_scalar * g
 
-  # Physics Residual
-  # residual = G_mu_nu
-  # (Ignoring T_mu_nu for the simplest control baseline)
-  residual = g_mu_nu
+  # Matter Stress-Energy Tensor (Pressureless Dust)
+  # Density dilutes as 1 / sqrt(det(spatial_metric))
+  spatial_metric = g[1:4, 1:4]
+  gamma = jnp.linalg.det(spatial_metric)
+  # Protect against negative/zero determinant during early training
+  gamma = jnp.maximum(gamma, 1e-6)
+
+  # Extract trainable matter density parameter from the model
+  # Enforce Weak Energy Condition and a hard Baryonic matter floor
+  # (Omega_m = 0.05 -> kappa_rho_0 = 0.15)
+  kappa_rho_0 = jnp.maximum(jnp.abs(metric_fn.kappa_rho_0[0]), 0.05 * 3.0)
+  current_density = kappa_rho_0 / jnp.sqrt(gamma)
+
+  t_mu_nu = jnp.zeros((4, 4))
+  # In comoving coordinates, dust only has energy density (T_00 = rho * -g_00)
+  t_mu_nu = t_mu_nu.at[0, 0].set(current_density * -g[0, 0])
+
+  # Physics Residual (G_mu_nu - 8*pi*G * T_mu_nu = 0)
+  residual = g_mu_nu - t_mu_nu
 
   return jnp.mean(jnp.square(residual))
 

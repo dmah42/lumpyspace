@@ -2,7 +2,7 @@
 Core metric tensor wrapper for the PINN.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 import equinox as eqx
 import jax
@@ -17,6 +17,7 @@ class MetricNN(eqx.Module):
   """
 
   mlp: eqx.nn.MLP
+  kappa_rho_0: jnp.ndarray
 
   def __init__(self, key: jax.random.PRNGKey):
     # 4 inputs (t, x, y, z)
@@ -29,6 +30,10 @@ class MetricNN(eqx.Module):
       activation=jnp.sin,  # SiREN-like activation as per design
       key=key,
     )
+
+    # Initialize trainable matter density parameter
+    # Start midway between Baryonic only (0.05) and LambdaCDM (0.315)
+    self.kappa_rho_0 = jnp.array([((0.05 + 0.315) / 2.0) * 3.0])
 
     # Initialize the final layer to be NEAR Minkowski.
     # We add tiny random noise to avoid the 'perfect' zero-derivative
