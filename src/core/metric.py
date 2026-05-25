@@ -31,9 +31,10 @@ class MetricNN(eqx.Module):
       key=key,
     )
 
-    # Initialize trainable matter density parameter
-    # Start midway between Baryonic only (0.05) and LambdaCDM (0.315)
-    self.kappa_rho_0 = jnp.array([((0.05 + 0.315) / 2.0) * 3.0])
+    # Initialize trainable matter density parameter (raw theta)
+    # Start at -5.0 to represent a universe starting near the starved
+    # baryonic floor.
+    self.kappa_rho_0 = jnp.array([-5.0])
 
     # Initialize the final layer to be NEAR Minkowski.
     # We add tiny random noise to avoid the 'perfect' zero-derivative
@@ -56,6 +57,31 @@ class MetricNN(eqx.Module):
     new_layers = list(self.mlp.layers)
     new_layers[last_idx] = seed_layer(new_layers[last_idx], k2)
     self.mlp = eqx.tree_at(lambda m: m.layers, self.mlp, tuple(new_layers))
+
+  def get_cosmology_today(self) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """
+    Returns (kappa_rho_0, omega_m) today computed in a single pass.
+    """
+    coords_today = jnp.array([1.0, 0.0, 0.0, 0.0])
+    g = self(coords_today)
+    g_spatial = g[1:4, 1:4]
+    g_spatial_inv = jnp.linalg.inv(g_spatial)
+
+    dg_dt = jax.jacfwd(lambda c: self(c))(coords_today)[:, :, 0]
+    dg_spatial_dt = dg_dt[1:4, 1:4]
+
+    h_tensor = 0.5 * jnp.matmul(g_spatial_inv, dg_spatial_dt)
+    u0 = jnp.sqrt(jnp.abs(g[0, 0]) + 1e-9)
+    h_tensor_phys = h_tensor / u0
+    h_mean_today = jnp.trace(h_tensor_phys) / 3.0
+
+    # Baryonic floor: 3 * H_mean_today^2 * Omega_b (Omega_b = 0.05)
+    # The factor of 3.0 comes from the Friedmann equation (3*H^2 = kappa*rho).
+    baryonic_floor = 3.0 * 0.05 * (h_mean_today**2)
+    kappa_rho_0 = baryonic_floor + jax.nn.softplus(self.kappa_rho_0)
+    omega_m = kappa_rho_0 / (3.0 * (h_mean_today**2) + 1e-9)
+
+    return kappa_rho_0, omega_m
 
   def __call__(self, coords: jnp.ndarray) -> jnp.ndarray:
     """

@@ -26,7 +26,7 @@ def _get_log_writer(log_path: str | None, resume: bool = False):
     with open(log_path, mode=mode, newline="") as log_file:
       log_writer = csv.DictWriter(
         log_file,
-        fieldnames=["step", "loss", "l_phys", "l_sn", "l_bao", "kappa_rho_0"],
+        fieldnames=["step", "loss", "l_phys", "l_sn", "l_bao", "omega_m"],
       )
       if not (resume and file_exists):
         log_writer.writeheader()
@@ -94,8 +94,14 @@ def train_model(
     bao_cov: jnp.ndarray,
   ) -> tuple[eqx.Module, optax.OptState, jnp.ndarray, dict[str, jnp.ndarray]]:
     def loss_fn(model):
+      # Compute matter density and Omega_m today in a single pass to avoid
+      # redundant AD evaluations.
+      kappa_rho_0_today, omega_m_today = model.get_cosmology_today()
+
       # 1. Physics Loss (EFE residuals)
-      v_efe_loss = jax.vmap(lambda c: get_efe_loss(model, c))
+      v_efe_loss = jax.vmap(
+        lambda c: get_efe_loss(model, c, kappa_rho_0_today[0])
+      )
       l_phys = jnp.mean(v_efe_loss(coords))
 
       # 2. Data Loss (Supernova chi-squared)
@@ -110,7 +116,7 @@ def train_model(
         "l_phys": l_phys,
         "l_sn": l_sn,
         "l_bao": l_bao,
-        "kappa_rho_0": model.kappa_rho_0[0],
+        "omega_m": omega_m_today[0],
       }
 
     (loss, metrics), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(
@@ -176,32 +182,35 @@ def train_model(
 
       current_loss = float(metrics["loss"])
 
+      current_step = start_step + i
+
       # Logging & Telemetry
       if writer_context and i % 10 == 0:
         log_writer, log_file = writer_context
         log_writer.writerow(
           {
-            "step": start_step + i,
+            "step": current_step,
             "loss": f"{current_loss:.6e}",
             "l_phys": f"{float(metrics['l_phys']):.6e}",
             "l_sn": f"{float(metrics['l_sn']):.6e}",
             "l_bao": f"{float(metrics['l_bao']):.6e}",
-            "kappa_rho_0": f"{float(metrics['kappa_rho_0']):.6e}",
+            "omega_m": f"{float(metrics['omega_m']):.6e}",
           }
         )
         log_file.flush()
 
       if i % 100 == 0:
-        print(f"Step {i}, Loss: {current_loss:.6e}")
+        print(f"Step {current_step}, Loss: {current_loss:.6e}")
 
       # Early Stopping & Safety Checks
       if jnp.isnan(current_loss):
-        print(f"CRITICAL: NaN loss detected at step {i}.")
+        print(f"CRITICAL: NaN loss detected at step {current_step}.")
         break
 
       if current_loss < target_loss:
         print(
-          f"Target loss reached at step {i}. Final loss: {current_loss:.6e}"
+          f"Target loss reached at step {current_step}. "
+          f"Final loss: {current_loss:.6e}"
         )
         break
 
@@ -210,7 +219,8 @@ def train_model(
         patience_counter = 0
         if checkpoint_path:
           print(
-            f"Saving checkpoint with loss {current_loss:.6e} at step {i}..."
+            f"Saving checkpoint with loss {current_loss:.6e} at step "
+            f"{current_step}..."
           )
           os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
           eqx.tree_serialise_leaves(checkpoint_path, model)
@@ -218,7 +228,9 @@ def train_model(
         patience_counter += 1
 
       if patience_counter >= patience:
-        print(f"Early stopping triggered at step {i} (patience reached).")
+        print(
+          f"Early stopping triggered at step {current_step} (patience reached)."
+        )
         break
 
   return model

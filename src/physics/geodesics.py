@@ -336,10 +336,10 @@ def get_bao_distances(
     # Directional Hubble parameter
     h_dir = h_tensor_phys[axis_idx, axis_idx]
 
-    # D_H = 1 / H(z) in code units. We cap the value to the max we defined which
-    # is well beyond the observable redshift range to prevent numerical
-    # explosions when the universe is nearly static (H ~ 0) at startup.
-    dh_unit = jnp.minimum(1.0 / (jnp.abs(h_dir) + 1e-9), -L_MAX)
+    h_recip = 1.0 / (jnp.abs(h_dir) + 1e-9)
+    dh_unit = jnp.minimum(h_recip, -L_MAX) + 0.01 * jnp.maximum(
+      0.0, h_recip - (-L_MAX)
+    )
 
     # Apply penalty if target z was unreachable
     penalty = jnp.where(

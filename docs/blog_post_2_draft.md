@@ -113,130 +113,56 @@ Because `kappa_rho_0` is a native network parameter, Equinox automatically
 calculates its gradients. The network is now free to dynamically "discover" the
 matter density that best balances the EFE against the Supernova and BAO data!
 
-### A Balanced Start
+### The Dark Matter Challenge
 
-To give the network a fair beginning, I initialized `kappa_rho_0` to the
-mathematical equivalent of $\Omega_m = 0.1825$: exactly midway between the
-baryonic matter density ($\Omega_m = 0.05$) and the standard $\Lambda$CDM value
-($\Omega_m = 0.315$). This gave the network a head start, letting it adjust the
-matter density up or down to see if it would gravitate[^4] toward standard dark
-matter or push down to the baryonic floor.
+To make this a true test of the cosmological physics, I decided to start the
+universe with $\Omega_m = 0.05$, representing a universe with only Baryonic
+(normal) matter and zero Dark Matter.
 
-### The Single-Parameter Bottleneck
+If the network can satisfy the observable universe and the EFE with only
+baryonic matter, it will do so. If not, it will be forced to dynamically
+increase `kappa_rho_0` to "discover" Dark Matter.
 
-During early testing, I ran into a classic PINN optimization problem:
-`kappa_rho_0` was updating extremely slowly. The issue stems from the difference
-in parameter scales: The neural network contains over 9,000 weights and biases
-that define the metric's spatial and temporal variations. In contrast, the
-matter density is a single scalar parameter. 
+Enforcing this baryonic floor correctly is a major challenge:
 
-When the Adam optimizer calculates updates, it applies global gradient norm
-clipping to prevent numerical instability. Because the L2 norm of the gradient
-vector is calculated across all 9,000+ parameters, the gradients of the network
-weights completely dominate the norm. This causes the gradient of the single
-scalar `kappa_rho_0` to be scaled down by nearly two orders of magnitude. 
+1. **The Gradient Freezing Problem:**
+   In early tests, I enforced the floor using a hard minimum in the loss:
+   $$\kappa \rho_0 = \text{max}(|\theta|, \text{Floor})$$
+   If the optimizer tried to push the matter density lower than the floor, the
+   parameter would drop below it, and the loss function would flatline. Because
+   the derivative of a flat function is exactly zero, the parameter would be
+   trapped without any gradient signal to pull it back up, freezing it forever.
 
-If I increase the global learning rate to make the matter density update faster,
-the network weights will become unstable and trigger NaN gradients. If I keep
-the learning rate low, the matter density remains flat.
+   To keep the gradients alive, I replaced the hard cap with a smooth ramp
+   using a shifted Softplus function:
+   $$\kappa \rho_0 = \text{Baryonic Floor} + \text{softplus}(\theta)$$
+   Because `softplus(x)` is always strictly positive, the physical density is
+   guaranteed to remain above the floor, and because its derivative is
+   non-zero everywhere, the parameter never loses its gradient traction. To
+   start the universe exactly at the baryonic floor, I initialized the raw
+   parameter $\theta$ to $-5.0$ (mapping to an initial physical density very
+   close to the minimum floor).
 
-To resolve this, I implemented a gradient multiplier in the training loop. After
-the standard backpropagation step, we intercept the gradients and scale the
-gradient of `kappa_rho_0` by a factor of 80. This allows the global matter
-density to adjust rapidly to satisfy the Einstein Field Equations, while the
-network weights can adjust slowly and smoothly to form a consistent space-time
-metric.
+2. **The Dynamic Floor Correction:**
+   Normally, one might assume a static floor of $\kappa\rho_0 = 0.05 \times 3$
+   (using the standard flat FLRW relation $\kappa\rho_0 = 3\Omega_m H_0^2$ with
+   $H_0 \approx 1$). However, because the network is dynamically deriving the
+   expansion rate $H(t)$, using a static approximation of $H_0$ is a physical
+   inconsistency.
+
+   To correct this, I implemented a dynamically scaled baryonic floor:
+   $$\text{Baryonic Floor} = 3 \cdot \Omega_b \cdot H_{mean}(1.0)^2$$
+   where $\Omega_b = 0.05$ represents the minimum baryonic matter density today
+   relative to the critical density, and $H_{mean}(1.0)$ is the model's own
+   derived expansion rate today. This ensures that the boundary constraints
+   remain physically self-consistent at every training step.
 
 ### Results
 
-![Hubble and Shear Plots](kappa_mid_hubble_shear_plots.png)
-
-After letting the training run converge, the model settled on a stable solution,
-though the results are more indicative of initialization bias than a physical
-conclusion:
-
-1. **The Trainable Matter Density**:
-   The matter density parameter `kappa_rho_0` converged to `0.510`, which
-   translates to a physical matter density of:
-   $$\Omega_m \approx 0.170$$
-   Instead of making a clear physical choice, the parameter simply drifted
-   slightly from its starting value of $0.1825$ down to $0.170$. This suggests
-   the optimizer settled in the local valley of its initialization rather than
-   actively searching the parameter landscape.
-
-2. **Directional Expansion Rates $H(t)$**:
-   The expansion rates along $x$ and $z$ ($H_x, H_z$) track each other closely,
-   peaking at $\approx 0.046$ before settling to $\approx 0.030$ today, while the
-   $y$-axis expands more slowly ($H_y \approx 0.012$) and contracts slightly to
-   $\approx -0.010$ today. The average Hubble parameter today is $H_{mean}
-   \approx 0.017$.
-
-3. **Shear Scalar $\sigma^2(t)$**:
-   The shear scalar remains flat at exactly `0.0` in the early universe, peaking at
-   a tiny $\sigma^2 \approx 0.0115$ around $t = -0.1$ before decaying to
-   $\approx 0.0084$ today. 
-
-#### What This Means Physically
-
-Because we started the universe with a significant matter component, the physics
-engine did not need to distort the geometry to fit the distance data. The
-presence of matter handles the deceleration and expansion profiles naturally,
-meaning the shear is suppressed to a peak of only $0.0115$ (40 times smaller
-than the vacuum run). Physically, once matter is present, the metric behaves
-almost exactly like a standard isotropic FLRW cosmology. The optimizer did not
-need to use anisotropic shear as a mathematical shortcut to satisfy the EFE.
-
-While it is promising that the 4D PINN can recover a stable, near-isotropic
-FLRW-like solution without any hardcoded symmetry assumptions, we need to go
-further. Because the matter density barely moved from its starting value, we
-must force the model out of this comfortable middle-ground to see if it actually
-needs Dark Matter, or if it can fit the data using only baryonic matter.
-
-Ultimately, this run proved that when we relax the FLRW symmetry assumptions,
-a universe starting from a middle-ground matter density can fit both supernovae
-and BAO data (though not perfectly) with less matter and a highly shearing,
-anisotropic geometry, while strictly obeying General Relativity. 
-
-### Starving the Universe
-
-Starting the universe with a comfortable middle-ground matter density proved to
-be unhelpful. Because the network began in a relatively stable valley, the
-optimizer did not feel any pressure to move $\kappa \rho_0$. To make this a
-true test of the cosmological physics, I decided to starve the universe, starting
-it with $\Omega_m = 0.05$ ($\kappa \rho_0 = 0.15$), representing a universe with
-zero Dark Matter.
-
-Either the model would figure out a space-time that satisfies the observable
-universe and EFE with only Baryonic matter, or it would create Dark Matter.
-
-In the initial implementation, the baryonic floor was enforced using a hard
-minimum in the loss function: $$\kappa \rho_0 = \text{max}(|\theta|, 0.15)$$
-
-If the optimizer tried to push the matter density lower than the floor, the
-parameter would drop below $0.15$, but the loss function would cap the value at
-exactly $0.15$. Because the loss is completely flat for any value below $0.15$,
-the derivative of the loss with respect to the parameter became exactly zero.
-The parameter would be trapped with no gradient signal to pull it back up,
-freezing it forever.
-
-To keep the gradients alive across the entire training run, I replaced the hard
-cap with a smooth ramp using a shifted Softplus function:
-$$\kappa \rho_0 = 0.15 + \text{softplus}(\theta)$$
-
-Because `softplus(x)` is always strictly positive, the physical density is
-guaranteed to remain above the $0.15$ baryonic floor. And because the
-derivative of `softplus(x)` (which is `sigmoid(x)`) is non-zero everywhere, the
-parameter never loses its gradient traction. 
-
-To start the universe exactly at the starved baryonic floor, I initialized the
-raw parameter $\theta$ to $-5.0$. This maps to an initial physical density of
-$0.1567$ ($\Omega_m \approx 0.052$) while keeping the gradient active.
-
-#### Results
-
-[Place results for Run 2 here once training converges, including the final value
-of kappa_rho_0, the directional Hubble parameters, and the shear scalar
-behavior.]
+[Place results here once training converges, including the final value of
+kappa_rho_0, the directional Hubble parameters, the shear scalar behavior,
+and the physical interpretation of whether the network "invented" Dark
+Matter.]
 
 [^0]: and, more importantly, doesn't give us anywhere to leave our stuff!
 

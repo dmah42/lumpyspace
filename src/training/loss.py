@@ -16,6 +16,7 @@ PLANCK_RD_MPC = 147.09
 def get_efe_loss(
   metric_fn: Callable[[jnp.ndarray], jnp.ndarray],
   coords: jnp.ndarray,
+  kappa_rho_0: float,
 ) -> jnp.ndarray:
   """
   Computes the residual of the Einstein Field Equations:
@@ -40,9 +41,8 @@ def get_efe_loss(
   gamma = jnp.maximum(gamma, 1e-6)
 
   # Extract trainable matter density parameter from the model
-  # Enforce Weak Energy Condition and a hard Baryonic matter floor
-  # (Omega_m = 0.05 -> kappa_rho_0 = 0.15)
-  kappa_rho_0 = jnp.maximum(jnp.abs(metric_fn.kappa_rho_0[0]), 0.05 * 3.0)
+  # Enforce Weak Energy Condition and a dynamic Baryonic matter floor
+  # dynamically scaled by the derived expansion rate today.
   current_density = kappa_rho_0 / jnp.sqrt(gamma)
 
   t_mu_nu = jnp.zeros((4, 4))

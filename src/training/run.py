@@ -13,13 +13,13 @@ from src.training.trainer import train_model
 
 
 def run_training(
-  max_steps: int = 2000,
+  max_steps: int = 10000,
   learning_rate: float = 1e-5,
   checkpoint_path: str = "checkpoints/pinn_metric.eqx",
   log_path: str = "logs/training_metrics.csv",
   w_efe: float = 1.0,
   w_sn: float = 5.0,
-  w_bao: float = 1.0,
+  w_bao: float = 5.0,
 ) -> None:
   """
   Orchestrates the full training pipeline on the real dataset.
@@ -63,6 +63,7 @@ def run_training(
     learning_rate=learning_rate,
     log_path=log_path,
     kick_period=200,
+    patience=1000,
     peak_learning_rate=1.5e-4,
     checkpoint_path=checkpoint_path,
     key=train_key,

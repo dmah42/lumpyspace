@@ -248,6 +248,40 @@ A major bottleneck when optimizing deep network parameters alongside single phys
     ```
 *   **Physical Justification:** The matter density represents a global physical constant that should adjust rapidly to balance the EFE, while the metric network weights must adjust slowly and smoothly to avoid introducing singular coordinate ripples.
 
+### 6.4 Trainable Matter Density Parameterization & Dynamic Floor
+To ensure the matter density parameter $\kappa\rho_0$ remains physically
+consistent without freezing optimization gradients near constraints, we
+implement a shifted softplus parameterization with a dynamically scaled floor.
+
+*   **The Problem (Gradient Freezing):** In early versions, a hard baryonic
+    floor was enforced via `jnp.maximum(kappa_rho_0, floor)`. However, if the
+    parameter dropped below the constraint, the gradient of the loss with
+    respect to the parameter became exactly zero, permanently trapping the
+    parameter in a coordinate lock.
+*   **The Solution (Softplus Parameterization):** We map a raw unconstrained
+    parameter $\theta \in \mathbb{R}$ to the physical density parameter
+    $\kappa\rho_0$ via a shifted softplus function:
+    $$\kappa\rho_0 = \text{Baryonic Floor} + \text{softplus}(\theta)$$
+    Because the derivative of `softplus(x)` is `sigmoid(x)` (which is non-zero
+    everywhere), the gradient path remains active for all values of $\theta$.
+*   **Dynamic Baryonic Floor:** Rather than defining the floor using a static
+    approximation of $H_0 \approx 1$ (e.g. $0.05 \times 3 = 0.15$), the floor
+    is scaled dynamically by the model's derived expansion rate today
+    $H_{mean}(1.0)$:
+    $$\text{Baryonic Floor} = 3 \cdot \Omega_b \cdot H_{mean}(1.0)^2$$
+    where $\Omega_b = 0.05$ represents the minimum baryonic matter density
+    today. This ensures that the matter density bounds are physically
+    consistent with the derived cosmology at each step of training.
+
+### 6.5 EFE Coordinate Sampling & Active Redshift Region Prioritization
+To prevent the metric network from exploiting unobserved gaps in the coordinate space to build unphysical coordinate singularities (e.g. "gravitational redshift pumps" designed to fake expansion history), we implement a hierarchical sampling scheme for the training domain.
+
+*   **The Problem (Adversarial Singularities):** Under uniform sampling of coordinate time $t \in [-4.0, 1.0]$, a narrow coordinate singularity (width $\approx 0.1$) can easily hide in the gaps between the 128 sampled EFE training points. The network exploits this to generate the required observational redshift in a single violent contraction-expansion bounce, while keeping the rest of the metric flat and static to artificially minimize EFE loss.
+*   **Tradeoffs in Mitigation Strategies:**
+    *   *Surgical Geodesic Sampling:* Enforcing EFE constraints directly on the coordinates of the geodesic solver's output rays offers perfect efficiency but creates a highly complex compilation graph with nested metric dependency (EFE gradients evaluated on metric-dependent trajectories), leading to extreme JAX compile times and unstable gradients.
+    *   *Brute-Force Uniform Sampling:* Increasing uniform sampling (e.g., to 1024 points) is JIT-friendly but computationally expensive and still statistically vulnerable.
+*   **The Solution (Active Redshift Prioritization):** We utilize a non-uniform probability distribution for sampling coordinate time $t$ during the EFE loss calculation. We partition the sample budget (e.g., 256 points) to place 70% of the coordinate points in the "active redshift region" $t \in [-1.5, 1.0]$ where the distance observations reside, and the remaining 30% uniformly across the rest of the domain $[-4.0, -1.5]$. This increases the sampling density in the critical region by over 2.5x without blowing up the global compute budget, effectively blocking the network from hiding singularities near the light cone.
+
 ---
 
 ## 7. Testing & Validation

@@ -57,23 +57,32 @@ def test_efe_loss_minkowski():
   for a flat Minkowski spacetime (vacuum solution).
   """
 
-  def minkowski_metric(coords):
-    return jnp.diag(jnp.array([-1.0, 1.0, 1.0, 1.0]))
+  class MinkowskiMetric:
+    def __init__(self):
+      self.kappa_rho_0 = jnp.array([-20.0])
 
-  # Minkowski is a vacuum solution, so matter density must be 0
-  minkowski_metric.kappa_rho_0 = jnp.array([0.0])
+    def __call__(self, coords):
+      return jnp.diag(jnp.array([-1.0, 1.0, 1.0, 1.0]))
+
+    def get_cosmology_today(self):
+      # Flat Minkowski spacetime has zero expansion: H_mean(1.0) = 0.0.
+      # Dynamic floor = 3.0 * 0.05 * (0.0^2) = 0.0.
+      # Total physical matter density is 0.0 + softplus(theta) ~ 0.0.
+      kappa_rho_0 = jnp.array([0.0 + jax.nn.softplus(self.kappa_rho_0[0])])
+      omega_m = kappa_rho_0 / 1e-9
+      return kappa_rho_0, omega_m
+
+  metric_fn = MinkowskiMetric()
 
   # Evaluate at an arbitrary coordinate point
   coords = jnp.array([0.5, 0.0, 0.0, 0.0])
 
-  loss = get_efe_loss(minkowski_metric, coords)
+  kappa_rho_0_arr, _ = metric_fn.get_cosmology_today()
+  loss = get_efe_loss(metric_fn, coords, kappa_rho_0_arr[0])
 
   assert not jnp.isnan(loss), "EFE loss returned NaN."
-  # Minkowski is flat, but get_efe_loss enforces a hard baryonic matter floor
-  # of kappa_rho_0 = 0.15 (Omega_m = 0.05 * 3). In Minkowski, the residual
-  # is G_00 - T_00 = 0 - 0.15 = -0.15, leading to a mean squared loss of
-  # (-0.15)^2 / 16 = 0.00140625.
-  expected_loss = (0.15**2) / 16.0
+  # Since Minkowski is flat and physical density is 0, expected EFE loss is 0.
+  expected_loss = 0.0
   assert jnp.allclose(
     loss, expected_loss, atol=1e-6
   ), f"Expected {expected_loss} loss, got {loss}"
