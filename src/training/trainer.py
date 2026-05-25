@@ -15,18 +15,21 @@ from src.training.loss import get_bao_loss, get_data_loss, get_efe_loss
 
 
 @contextmanager
-def _get_log_writer(log_path: str | None):
+def _get_log_writer(log_path: str | None, resume: bool = False):
   """Helper to handle optional CSV logging."""
   if log_path is None:
     yield None
   else:
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    with open(log_path, mode="w", newline="") as log_file:
+    file_exists = os.path.exists(log_path) and os.path.getsize(log_path) > 0
+    mode = "a" if (resume and file_exists) else "w"
+    with open(log_path, mode=mode, newline="") as log_file:
       log_writer = csv.DictWriter(
         log_file,
         fieldnames=["step", "loss", "l_phys", "l_sn", "l_bao", "kappa_rho_0"],
       )
-      log_writer.writeheader()
+      if not (resume and file_exists):
+        log_writer.writeheader()
       yield log_writer, log_file
 
 
@@ -48,6 +51,7 @@ def train_model(
   w_efe: float = 1.0,
   w_sn: float = 10.0,
   w_bao: float = 0.5,
+  resume: bool = False,
 ) -> eqx.Module:
   """
   Executes the training loop for the PINN.
@@ -64,7 +68,6 @@ def train_model(
     progress = jnp.minimum(cycle_step / decay_length, 1.0)
     cosine_val = 0.5 * (1.0 + jnp.cos(jnp.pi * progress))
 
-    peak_learning_rate = 1e-3
     return learning_rate + (peak_learning_rate - learning_rate) * cosine_val
 
   # Use gradient clipping to stabilize training
@@ -113,6 +116,13 @@ def train_model(
     (loss, metrics), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(
       model
     )
+
+    # Scale the gradient of the trainable matter density parameter to overcome
+    # the suppression caused by the dimensionality of the MLP weights during
+    # global norm clipping.
+    boosted_kappa_grad = grads.kappa_rho_0 * 80.0
+    grads = eqx.tree_at(lambda m: m.kappa_rho_0, grads, boosted_kappa_grad)
+
     updates, opt_state = optimizer.update(grads, opt_state, model)
     model = eqx.apply_updates(model, updates)
     return model, opt_state, loss, metrics
@@ -121,12 +131,26 @@ def train_model(
   best_loss = float("inf")
   patience_counter = 0
 
+  start_step = 0
+  if resume and log_path:
+    if os.path.exists(log_path) and os.path.getsize(log_path) > 0:
+      try:
+        with open(log_path) as f:
+          reader = list(csv.DictReader(f))
+          if reader:
+            start_step = int(reader[-1]["step"]) + 10
+      except Exception as e:
+        print(f"Warning: Could not parse last step from log: {e}")
+
   if log_path:
-    print(f"Starting training. Logging to {log_path}...")
+    if resume and start_step > 0:
+      print(f"Resuming log at step {start_step}. Appending to {log_path}...")
+    else:
+      print(f"Starting training. Logging to {log_path}...")
   else:
     print("Starting training (logging disabled)...")
 
-  with _get_log_writer(log_path) as writer_context:
+  with _get_log_writer(log_path, resume=resume) as writer_context:
     for i in range(max_steps):
       key, subkey = jax.random.split(key)
       # We sample coordinates across the physical domain [-4.0, 1.0]
@@ -157,7 +181,7 @@ def train_model(
         log_writer, log_file = writer_context
         log_writer.writerow(
           {
-            "step": i,
+            "step": start_step + i,
             "loss": f"{current_loss:.6e}",
             "l_phys": f"{float(metrics['l_phys']):.6e}",
             "l_sn": f"{float(metrics['l_sn']):.6e}",

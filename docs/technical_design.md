@@ -234,6 +234,20 @@ Where:
 *   $\mu$ is the penalty parameter, which increases over training to penalize constraint violations more severely.
 *   **Tradeoffs:** Guarantees that the final converged metric strictly satisfies General Relativity. However, it requires careful tuning of $\mu$'s growth rate to prevent numerical instability.
 
+### 6.3 Parameter Sensitivity & Gradient Boosting (The Scalar Multiplier)
+A major bottleneck when optimizing deep network parameters alongside single physical scalars (such as the trainable matter density $\kappa\rho_0$) is gradient scale imbalance.
+
+*   **The Problem:** The network contains thousands of weights that determine the complex curvature profiles, making the loss highly sensitive to their changes. These weights dominate the global gradient vector. When `optax.clip_by_global_norm(1.0)` is applied, it divides the entire gradient vector by the global norm. Consequently, the gradient of the single scalar $\kappa\rho_0$ is scaled down to near-zero (e.g. $10^{-4}$), causing it to move extremely slowly over training steps.
+*   **The Solution (The "Fast Track" Boost):** Rather than raising the global learning rate (which destabilizes the network and causes NaN gradient explosions), we apply a dedicated gradient multiplier to $\kappa\rho_0$ in the training step:
+    $$\nabla_{\kappa\rho_0} \mathcal{L}_{Total} \leftarrow \eta \cdot \nabla_{\kappa\rho_0} \mathcal{L}_{Total}$$
+    where $\eta \in [10.0, 100.0]$ is a boosting factor (e.g. $\eta = 50.0$).
+*   **Implementation:** Inside the training JIT step, after computing `grads`, we use `equinox.tree_at` to scale `grads.kappa_rho_0` before passing it to the optimizer:
+    ```python
+    boosted_grad = grads.kappa_rho_0 * 50.0
+    grads = eqx.tree_at(lambda m: m.kappa_rho_0, grads, boosted_grad)
+    ```
+*   **Physical Justification:** The matter density represents a global physical constant that should adjust rapidly to balance the EFE, while the metric network weights must adjust slowly and smoothly to avoid introducing singular coordinate ripples.
+
 ---
 
 ## 7. Testing & Validation

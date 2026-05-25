@@ -42,3 +42,5 @@ checkpoints/
 data/*
 !data/.gitkeep
 logs/
+
+.antigravitycli/

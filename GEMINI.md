@@ -23,6 +23,9 @@
 - **PINN Architecture:** SiREN activations should use `jnp.sin`.
 - **Metric Signature:** Lorentzian (-, +, +, +) must be strictly enforced in `MetricNN`.
 
+## Documentation & Text
+- **Formatting & Style:** Do NOT use em-dashes (—) in any documentation or text. Ever.
+
 ## Debugging
 - Never guess. Add debug logs, check the full output of tests, evaluate the
   problem and potential solutions before trying to fix something.

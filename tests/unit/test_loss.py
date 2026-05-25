@@ -69,7 +69,14 @@ def test_efe_loss_minkowski():
   loss = get_efe_loss(minkowski_metric, coords)
 
   assert not jnp.isnan(loss), "EFE loss returned NaN."
-  assert jnp.allclose(loss, 0.0, atol=1e-6), f"Expected 0.0 loss, got {loss}"
+  # Minkowski is flat, but get_efe_loss enforces a hard baryonic matter floor
+  # of kappa_rho_0 = 0.15 (Omega_m = 0.05 * 3). In Minkowski, the residual
+  # is G_00 - T_00 = 0 - 0.15 = -0.15, leading to a mean squared loss of
+  # (-0.15)^2 / 16 = 0.00140625.
+  expected_loss = (0.15**2) / 16.0
+  assert jnp.allclose(
+    loss, expected_loss, atol=1e-6
+  ), f"Expected {expected_loss} loss, got {loss}"
 
 
 def test_data_loss_computation():
