@@ -140,7 +140,7 @@ def _integrate_geodesic(
 
   term = diffrax.ODETerm(geodesic_system)
   solver = diffrax.Tsit5()
-  stepsize_controller = diffrax.PIDController(rtol=1e-5, atol=1e-7)
+  stepsize_controller = diffrax.PIDController(rtol=1e-5, atol=1e-6)
 
   # Termination event to prevent crashing into singularities
   event = diffrax.Event(_check_redshift_termination)

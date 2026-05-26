@@ -161,10 +161,14 @@ def train_model(
       key, subkey = jax.random.split(key)
       # We sample coordinates across the physical domain [-4.0, 1.0]
       # to ensure the metric is constrained well beyond the supernova data.
-      t_coords = jax.random.uniform(subkey, (128, 1), minval=-4.0, maxval=1.0)
-      spatial_coords = jax.random.uniform(
-        subkey, (128, 3), minval=-1.0, maxval=1.0
-      )
+      k1, k2, k3 = jax.random.split(subkey, 3)
+      # 70% of 256 = 180 points in the active redshift region [-1.5, 1.0]
+      t_active = jax.random.uniform(k1, (180, 1), minval=-1.5, maxval=1.0)
+      # 30% of 256 = 76 points in the rest of the domain [-4.0, -1.5]
+      t_inactive = jax.random.uniform(k2, (76, 1), minval=-4.0, maxval=-1.5)
+      t_coords = jnp.concatenate([t_active, t_inactive], axis=0)
+
+      spatial_coords = jax.random.uniform(k3, (256, 3), minval=-1.0, maxval=1.0)
       coords = jnp.concatenate([t_coords, spatial_coords], axis=1)
 
       model, opt_state, _, metrics = step(
