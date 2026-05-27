@@ -66,10 +66,14 @@ def test_efe_loss_minkowski():
 
     def get_cosmology_today(self):
       # Flat Minkowski spacetime has zero expansion: H_mean(1.0) = 0.0.
-      # Dynamic floor = 3.0 * 0.05 * (0.0^2) = 0.0.
-      # Total physical matter density is 0.0 + softplus(theta) ~ 0.0.
-      kappa_rho_0 = jnp.array([0.0 + jax.nn.softplus(self.kappa_rho_0[0])])
-      omega_m = kappa_rho_0 / 1e-9
+      omega_m = jnp.array(
+        [
+          0.05
+          + jax.nn.softplus(self.kappa_rho_0[0])
+          - jax.nn.softplus(self.kappa_rho_0[0] - 0.25)
+        ]
+      )
+      kappa_rho_0 = omega_m * 3.0 * 0.0**2
       return kappa_rho_0, omega_m
 
   metric_fn = MinkowskiMetric()

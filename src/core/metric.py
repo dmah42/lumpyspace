@@ -75,11 +75,15 @@ class MetricNN(eqx.Module):
     h_tensor_phys = h_tensor / u0
     h_mean_today = jnp.trace(h_tensor_phys) / 3.0
 
-    # Baryonic floor: 3 * H_mean_today^2 * Omega_b (Omega_b = 0.05)
-    # The factor of 3.0 comes from the Friedmann equation (3*H^2 = kappa*rho).
-    baryonic_floor = 3.0 * 0.05 * (h_mean_today**2)
-    kappa_rho_0 = baryonic_floor + jax.nn.softplus(self.kappa_rho_0)
-    omega_m = kappa_rho_0 / (3.0 * (h_mean_today**2) + 1e-9)
+    # Double softplus mapping: [0.05, 0.3]
+    # Restricts omega_m to the physical range and prevents gradient
+    # freezing/vanishing.
+    omega_m = (
+      0.05
+      + jax.nn.softplus(self.kappa_rho_0)
+      - jax.nn.softplus(self.kappa_rho_0 - 0.25)
+    )
+    kappa_rho_0 = omega_m * 3.0 * (h_mean_today**2)
 
     return kappa_rho_0, omega_m
 

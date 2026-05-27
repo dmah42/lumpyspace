@@ -117,45 +117,45 @@ matter density that best balances the EFE against the Supernova and BAO data!
 
 To make this a true test of the cosmological physics, I decided to start the
 universe with $\Omega_m = 0.05$, representing a universe with only Baryonic
-(normal) matter and zero Dark Matter.
+(normal) matter and zero Dark Matter. 
 
 If the network can satisfy the observable universe and the EFE with only
 baryonic matter, it will do so. If not, it will be forced to dynamically
-increase `kappa_rho_0` to "discover" Dark Matter.
+increase $\Omega_m$ to "discover" Dark Matter. 
 
-Enforcing this baryonic floor correctly is a major challenge:
+In early runs, when the EFE loss spiked, the optimizer took the lazy way out: it
+bloated $\Omega_m$ up to $1.0$ (and higher) to escape into a smooth,
+homogeneous, matter-heavy metric. But in no physical reality is
+$\Omega_m > 0.35$. BBN anchors our lower baryonic limit at $\approx 0.05$, and
+gravitational lensing and galaxy cluster dynamics anchor the maximum (with dark
+matter) at $\approx 0.3$. 
 
-1. **The Gradient Freezing Problem:**
-   In early tests, I enforced the floor using a hard minimum in the loss:
-   $$\kappa \rho_0 = \text{max}(|\theta|, \text{Floor})$$
-   If the optimizer tried to push the matter density lower than the floor, the
-   parameter would drop below it, and the loss function would flatline. Because
-   the derivative of a flat function is exactly zero, the parameter would be
-   trapped without any gradient signal to pull it back up, freezing it forever.
+So we must enforce this strict physical window $[0.05, 0.3]$:
 
-   To keep the gradients alive, I replaced the hard cap with a smooth ramp
-   using a shifted Softplus function:
-   $$\kappa \rho_0 = \text{Baryonic Floor} + \text{softplus}(\theta)$$
-   Because `softplus(x)` is always strictly positive, the physical density is
-   guaranteed to remain above the floor, and because its derivative is
-   non-zero everywhere, the parameter never loses its gradient traction. To
-   start the universe exactly at the baryonic floor, I initialized the raw
-   parameter $\theta$ to $-5.0$ (mapping to an initial physical density very
-   close to the minimum floor).
+1. **The Double Softplus Bounding:**
+   Normally, one might use a sigmoid function to clamp a parameter between two
+   limits. But the sigmoid function has a vanishing gradient near its
+   boundaries, which acts as an artificial restoring force, pushing the
+   parameter back towards the middle (0.175) and making it very hard to touch
+   the pure baryonic boundary.
+   
+   Instead, I implemented a **double softplus** mapping:
+   $$\Omega_m = 0.05 + \text{softplus}(\theta) - \text{softplus}(\theta - 0.25)$$
+   This function has a constant gradient of $\approx 1.0$ in the middle range,
+   and only caps smoothly using softplus near the boundaries. We initialize the
+   raw parameter $\theta$ to $-5.0$ to start exactly at the baryonic floor.
 
-2. **The Dynamic Floor Correction:**
-   Normally, one might assume a static floor of $\kappa\rho_0 = 0.05 \times 3$
-   (using the standard flat FLRW relation $\kappa\rho_0 = 3\Omega_m H_0^2$ with
-   $H_0 \approx 1$). However, because the network is dynamically deriving the
-   expansion rate $H(t)$, using a static approximation of $H_0$ is a physical
-   inconsistency.
-
-   To correct this, I implemented a dynamically scaled baryonic floor:
-   $$\text{Baryonic Floor} = 3 \cdot \Omega_b \cdot H_{mean}(1.0)^2$$
-   where $\Omega_b = 0.05$ represents the minimum baryonic matter density today
-   relative to the critical density, and $H_{mean}(1.0)$ is the model's own
-   derived expansion rate today. This ensures that the boundary constraints
-   remain physically self-consistent at every training step.
+2. **The Dynamic Cosmology Coupling:**
+   Normally, one might assume a static floor of $\kappa\rho_0 = 3\Omega_m H_0^2$
+   with $H_0 \approx 1$. However, because the network is dynamically deriving
+   the expansion rate $H(t)$, using a static approximation of $H_0$ is a
+   physical inconsistency.
+   
+   To correct this, I coupled the matter density coefficient dynamically to the
+   model's own derived expansion rate today, $H_{mean}(1.0)$:
+   $$\kappa \rho_0 = \Omega_m \cdot 3 \cdot H_{mean}(1.0)^2$$
+   This ensures that the boundary constraints remain physically self-consistent
+   at every training step.
 
 ### Results
 
