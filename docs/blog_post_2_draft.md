@@ -142,8 +142,16 @@ So we must enforce this strict physical window $[0.05, 0.3]$:
    Instead, I implemented a **double softplus** mapping:
    $$\Omega_m = 0.05 + \text{softplus}(\theta) - \text{softplus}(\theta - 0.25)$$
    This function has a constant gradient of $\approx 1.0$ in the middle range,
-   and only caps smoothly using softplus near the boundaries. We initialize the
-   raw parameter $\theta$ to $-5.0$ to start exactly at the baryonic floor.
+   and only caps smoothly using softplus near the boundaries.
+   
+   However, forcing a newborn universe to live on a strict baryon-only diet from
+   step zero creates a massive numerical bottleneck. Because the network had to
+   fit the expansion data immediately under starvation conditions, it developed
+   premature coordinate rips that crashed the geodesic solver. To resolve this,
+   we initialize the parameter $\theta$ to $3.0$ (starting near the dark matter
+   ceiling of $\Omega_m \approx 0.3$). This gives the model a smooth,
+   homogeneous runway to gradually grow spatial gradients as the matter density
+   descends.
 
 2. **The Dynamic Cosmology Coupling:**
    Normally, one might assume a static floor of $\kappa\rho_0 = 3\Omega_m H_0^2$
