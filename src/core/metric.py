@@ -32,9 +32,9 @@ class MetricNN(eqx.Module):
     )
 
     # Initialize trainable matter density parameter (raw theta)
-    # Start at -5.0 to represent a universe starting near the starved
-    # baryonic floor.
-    self.kappa_rho_0 = jnp.array([-5.0])
+    # Start at 3.0 so the universe starts near the dark matter ceiling
+    # (omega_m ~ 0.3) and can optimize downwards.
+    self.kappa_rho_0 = jnp.array([3.0])
 
     # Initialize the final layer to be NEAR Minkowski.
     # We add tiny random noise to avoid the 'perfect' zero-derivative
