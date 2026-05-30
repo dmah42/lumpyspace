@@ -128,7 +128,7 @@ supernova-only training loop. To understand what kind of universe the model
 discovered, we examine the convergence profile, the directional expansion
 rates over time, and the spatial maps today ($t=1.0$).
 
-#### 1. The Optimization Trajectory: Shedding Dark Matter
+#### The Optimization Trajectory: Shedding Dark Matter
 
 The first question is: how does the network tune the matter density when given
 the freedom to do so?
@@ -145,7 +145,7 @@ presence of dark matter. It finds that the field equations are much easier
 to satisfy if the universe is dominated by spatial inhomogeneities rather than
 a smooth, heavy background of cold dark matter.
 
-#### 2. Cosmic Shear and Anisotropic Expansion
+#### Cosmic Shear and Anisotropic Expansion
 
 Next, we look at how the expansion rate evolves over coordinate time $t$ (from
 the early universe at $t=-4.0$ to today at $t=1.0$):
@@ -164,7 +164,7 @@ The plots reveal a highly dynamic and anisotropic expansion history:
   this late-time spike in shear is precisely the mechanism the network uses
   to mimic the accelerating expansion rate normally attributed to Dark Energy.
 
-#### 3. Spatial Curvature and Shear Maps Today
+#### Spatial Curvature and Shear Maps Today
 
 To visualize the three-dimensional geometry of the universe today, we mapped
 the shear scalar $\sigma^2$ and the Ricci curvature scalar $R$ across all three
