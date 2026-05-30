@@ -182,7 +182,12 @@ $$\mathcal{L}_{Total} = w_P \mathcal{L}_{Physics} + w_D \mathcal{L}_{Data} + w_{
 *   **Task 4.6: Future Directions & Additional Observational Probes**
     *   *Baryon Acoustic Oscillations (BAO):* BAO provides an absolute distance scale (standard ruler) derived from the physics of the early universe plasma. Fitting the PINN against 3D BAO measurements (transverse vs. line-of-sight) would be the ultimate test of anisotropic geometry, as BAO measurements are highly sensitive to directional expansion.
     *   *CMB Temperature Power Spectrum:* Mapping our 4D metric fluctuations to the CMB angular power spectrum to ensure the late-time shear does not violate the high-redshift isotropy of the CMB ($z \approx 1100$).
-    *   *Local Density Backreaction (Lemaître-Tolman-Bondi):* Relaxing the Bianchi Type I symmetry to allow for full radial inhomogeneity. We can test if we live inside a massive local void, where negative spatial curvature acts as an effective repulsive force (mimicking $\Lambda$).
+    *   *Inhomogeneous and Anisotropic Spacetimes (Szekeres):* Relaxing the
+        Bianchi Type I symmetry to allow for full spatial inhomogeneity while
+        preserving directional expansion. We can model Szekeres spacetimes
+        analytically to test if localized curvature gradients and non-zero
+        shear can simultaneously explain both the Hubble Tension and the
+        illusion of Dark Energy.
 
 *   **Task 4.7: Automated Hyperparameter Optimization (Gradient Balancing)**
     *   **Goal:** Automate the tuning of the multi-probe loss weights ($w_{sn}$, $w_{bao}$) to prevent the physics loss ($G_{\mu\nu}=0$) and data losses from overwhelming each other.
