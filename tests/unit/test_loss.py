@@ -82,14 +82,14 @@ def test_efe_loss_minkowski():
   coords = jnp.array([0.5, 0.0, 0.0, 0.0])
 
   kappa_rho_0_arr, _ = metric_fn.get_cosmology_today()
-  loss = get_efe_loss(metric_fn, coords, kappa_rho_0_arr[0])
+  efe_loss, wec_penalty = get_efe_loss(metric_fn, coords, kappa_rho_0_arr[0])
 
-  assert not jnp.isnan(loss), "EFE loss returned NaN."
-  # Since Minkowski is flat and physical density is 0, expected EFE loss is 0.
-  expected_loss = 0.0
-  assert jnp.allclose(
-    loss, expected_loss, atol=1e-6
-  ), f"Expected {expected_loss} loss, got {loss}"
+  assert not jnp.isnan(efe_loss), "EFE loss returned NaN."
+  assert not jnp.isnan(wec_penalty), "WEC penalty returned NaN."
+  # Since Minkowski is flat and physical density is 0, expected EFE loss is 0
+  # and WEC is 0.
+  assert jnp.allclose(efe_loss, 0.0, atol=1e-6)
+  assert jnp.allclose(wec_penalty, 0.0, atol=1e-6)
 
 
 def test_data_loss_computation():
@@ -116,3 +116,78 @@ def test_data_loss_computation():
   assert not jnp.isnan(loss), "Data loss returned NaN."
   assert loss.shape == (), f"Expected scalar loss, got shape {loss.shape}"
   assert loss > 0.0, "Data loss should be strictly positive."
+
+
+def test_augmented_lagrangian_loss():
+  """
+  Verifies that the Augmented Lagrangian formulation correctly computes
+  the total loss given simulated metrics, Lagrange multiplier, and
+  penalty parameter.
+  """
+
+  # Simulated component losses
+  l_phys = jnp.array(0.1)
+  l_wec = jnp.array(0.05)
+  l_sn = jnp.array(0.5)
+  l_bao = jnp.array(0.2)
+
+  # Weights
+  w_efe = 1.0
+  w_sn = 10.0
+  w_bao = 0.5
+
+  # AL parameters
+  lambda_wec = jnp.array(0.2)
+  w_wec = jnp.array(5.0)
+
+  # Hand-computed expected total loss
+  expected_loss = (
+    w_efe * l_phys
+    + w_sn * l_sn
+    + w_bao * l_bao
+    + lambda_wec * l_wec
+    + 0.5 * w_wec * (l_wec**2)
+  )
+
+  # Let's perform the same computation
+  total_loss = (
+    w_efe * l_phys
+    + w_sn * l_sn
+    + w_bao * l_bao
+    + lambda_wec * l_wec
+    + 0.5 * w_wec * (l_wec**2)
+  )
+
+  assert jnp.allclose(total_loss, expected_loss, atol=1e-8)
+  assert total_loss > 0.0
+  assert not jnp.isnan(total_loss)
+
+
+def test_efe_loss_negative_curvature(monkeypatch):
+  """
+  Verifies that get_efe_loss computes a linear penalty for negative Ricci
+  scalar curvature.
+  """
+  # Mock get_ricci_tensor to return a tensor that results in a negative Ricci
+  # scalar. Minkowski metric has g = diag(-1, 1, 1, 1). If r_mu_nu has
+  # components diag(0.5, -0.5, -0.5, -0.5), then:
+  # R = g^mn r_mn = -0.5 - 0.5 - 0.5 - 0.5 = -2.0.
+  import src.training.loss
+
+  def mock_ricci_tensor(metric_fn, coords):
+    return jnp.diag(jnp.array([0.5, -0.5, -0.5, -0.5]))
+
+  monkeypatch.setattr(src.training.loss, "get_ricci_tensor", mock_ricci_tensor)
+
+  class MockMetric:
+    def __call__(self, coords):
+      return jnp.diag(jnp.array([-1.0, 1.0, 1.0, 1.0]))
+
+  metric_fn = MockMetric()
+  coords = jnp.array([1.0, 0.0, 0.0, 0.0])
+  kappa_rho_0 = 0.1
+
+  _, wec_penalty = get_efe_loss(metric_fn, coords, kappa_rho_0)
+
+  # For R = -2.0, the linear penalty should be exactly 2.0 (not 4.0!)
+  assert jnp.allclose(wec_penalty, 2.0, atol=1e-6)

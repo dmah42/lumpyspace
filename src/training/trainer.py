@@ -26,7 +26,15 @@ def _get_log_writer(log_path: str | None, resume: bool = False):
     with open(log_path, mode=mode, newline="") as log_file:
       log_writer = csv.DictWriter(
         log_file,
-        fieldnames=["step", "loss", "l_phys", "l_sn", "l_bao", "omega_m"],
+        fieldnames=[
+          "step",
+          "loss",
+          "l_phys",
+          "l_wec",
+          "l_sn",
+          "l_bao",
+          "omega_m",
+        ],
       )
       if not (resume and file_exists):
         log_writer.writeheader()
@@ -51,6 +59,7 @@ def train_model(
   w_efe: float = 1.0,
   w_sn: float = 10.0,
   w_bao: float = 0.5,
+  w_wec: float = 10.0,
   resume: bool = False,
 ) -> eqx.Module:
   """
@@ -102,17 +111,21 @@ def train_model(
     bao_dm: jnp.ndarray,
     bao_dh: jnp.ndarray,
     bao_cov: jnp.ndarray,
+    lambda_wec: jnp.ndarray,
+    w_wec: jnp.ndarray,
   ) -> tuple[eqx.Module, optax.OptState, jnp.ndarray, dict[str, jnp.ndarray]]:
     def loss_fn(model):
       # Compute matter density and Omega_m today in a single pass to avoid
       # redundant AD evaluations.
       kappa_rho_0_today, omega_m_today = model.get_cosmology_today()
 
-      # 1. Physics Loss (EFE residuals)
+      # 1. Physics Loss (EFE residuals & WEC penalties)
       v_efe_loss = jax.vmap(
         lambda c: get_efe_loss(model, c, kappa_rho_0_today[0])
       )
-      l_phys = jnp.mean(v_efe_loss(coords))
+      l_phys_vals, l_wec_vals = v_efe_loss(coords)
+      l_phys = jnp.mean(l_phys_vals)
+      l_wec = jnp.mean(l_wec_vals)
 
       # 2. Data Loss (Supernova chi-squared)
       l_sn = get_data_loss(model, sn_z, sn_mu, sn_err)
@@ -125,10 +138,18 @@ def train_model(
         operand=None,
       )
 
-      total_loss = w_efe * l_phys + w_sn * l_sn + w_bao * l_bao
+      # Total Loss using the Augmented Lagrangian Method to enforce WEC
+      total_loss = (
+        w_efe * l_phys
+        + w_sn * l_sn
+        + w_bao * l_bao
+        + lambda_wec * l_wec
+        + 0.5 * w_wec * (l_wec**2)
+      )
       return total_loss, {
         "loss": total_loss,
         "l_phys": l_phys,
+        "l_wec": l_wec,
         "l_sn": l_sn,
         "l_bao": l_bao,
         "omega_m": omega_m_today[0],
@@ -172,6 +193,10 @@ def train_model(
   else:
     print("Starting training (logging disabled)...")
 
+  # Initialize Augmented Lagrangian multipliers and scaling parameter
+  lambda_wec_val = jnp.array(0.0)
+  w_wec_val = jnp.array(w_wec)
+
   with _get_log_writer(log_path, resume=resume) as writer_context:
     for i in range(max_steps):
       key, subkey = jax.random.split(key)
@@ -198,11 +223,17 @@ def train_model(
         bao_dm,
         bao_dh,
         bao_cov,
+        lambda_wec_val,
+        w_wec_val,
       )
 
       current_loss = float(metrics["loss"])
-
       current_step = start_step + i
+
+      # Update Augmented Lagrangian multiplier:
+      # lambda <- lambda + mu * violation
+      l_wec_val = metrics["l_wec"]
+      lambda_wec_val = lambda_wec_val + w_wec_val * l_wec_val
 
       # Logging & Telemetry
       if writer_context and i % 10 == 0:
@@ -212,6 +243,7 @@ def train_model(
             "step": current_step,
             "loss": f"{current_loss:.6e}",
             "l_phys": f"{float(metrics['l_phys']):.6e}",
+            "l_wec": f"{float(metrics['l_wec']):.6e}",
             "l_sn": f"{float(metrics['l_sn']):.6e}",
             "l_bao": f"{float(metrics['l_bao']):.6e}",
             "omega_m": f"{float(metrics['omega_m']):.6e}",
@@ -220,7 +252,13 @@ def train_model(
         log_file.flush()
 
       if i % 100 == 0:
-        print(f"Step {current_step}, Loss: {current_loss:.6e}")
+        print(
+          f"Step {current_step}, Loss: {current_loss:.6e} | "
+          f"L_EFE: {float(metrics['l_phys']):.3e} | "
+          f"L_WEC: {float(metrics['l_wec']):.3e} | "
+          f"lambda: {float(lambda_wec_val):.3f} | "
+          f"w_wec: {float(w_wec_val):.1f}"
+        )
 
       # Early Stopping & Safety Checks
       if jnp.isnan(current_loss):

@@ -17,7 +17,7 @@ def get_efe_loss(
   metric_fn: Callable[[jnp.ndarray], jnp.ndarray],
   coords: jnp.ndarray,
   kappa_rho_0: float,
-) -> jnp.ndarray:
+) -> tuple[jnp.ndarray, jnp.ndarray]:
   """
   Computes the residual of the Einstein Field Equations:
   G_mu_nu - 8*pi*G * T_mu_nu = 0
@@ -53,10 +53,11 @@ def get_efe_loss(
   residual = g_mu_nu - t_mu_nu
 
   # Enforce the Weak Energy Condition by penalizing negative Ricci scalar
-  # (R = kappa * rho >= 0) using standard squared minimum penalty.
-  wec_penalty = jnp.square(jnp.minimum(r_scalar, 0.0))
+  # (R = kappa * rho >= 0) using a linear absolute violation penalty to
+  # ensure non-vanishing gradients.
+  wec_penalty = jnp.maximum(0.0, -r_scalar)
 
-  return jnp.mean(jnp.square(residual)) + wec_penalty
+  return jnp.mean(jnp.square(residual)), wec_penalty
 
 
 def get_data_loss(
