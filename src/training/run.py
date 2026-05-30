@@ -78,4 +78,4 @@ def run_training(
 
 
 if __name__ == "__main__":
-  run_training()
+  run_training(w_bao=0.0)

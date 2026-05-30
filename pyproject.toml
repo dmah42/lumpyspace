@@ -17,6 +17,7 @@ dev = [
   "ipykernel",
   "IPython",
   "matplotlib",
+  "nbconvert",
   "pre-commit",
   "pytest",
   "ruff",

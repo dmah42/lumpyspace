@@ -17,7 +17,7 @@ class MetricNN(eqx.Module):
   """
 
   mlp: eqx.nn.MLP
-  kappa_rho_0: jnp.ndarray
+  omega_m_raw: jnp.ndarray
 
   def __init__(self, key: jax.random.PRNGKey):
     # 4 inputs (t, x, y, z)
@@ -31,10 +31,9 @@ class MetricNN(eqx.Module):
       key=key,
     )
 
-    # Initialize trainable matter density parameter (raw theta)
-    # Start at 3.0 so the universe starts near the dark matter ceiling
-    # (omega_m ~ 0.3) and can optimize downwards.
-    self.kappa_rho_0 = jnp.array([3.0])
+    # Initialize trainable matter density parameter directly.
+    # Start exactly at 0.3 (dark matter ceiling).
+    self.omega_m_raw = jnp.array([0.3])
 
     # Initialize the final layer to be NEAR Minkowski.
     # We add tiny random noise to avoid the 'perfect' zero-derivative
@@ -75,14 +74,8 @@ class MetricNN(eqx.Module):
     h_tensor_phys = h_tensor / u0
     h_mean_today = jnp.trace(h_tensor_phys) / 3.0
 
-    # Double softplus mapping: [0.05, 0.3]
-    # Restricts omega_m to the physical range and prevents gradient
-    # freezing/vanishing.
-    omega_m = (
-      0.05
-      + jax.nn.softplus(self.kappa_rho_0)
-      - jax.nn.softplus(self.kappa_rho_0 - 0.25)
-    )
+    # Use the parameter directly as omega_m (PGD will enforce bounds)
+    omega_m = self.omega_m_raw
     kappa_rho_0 = omega_m * 3.0 * (h_mean_today**2)
 
     return kappa_rho_0, omega_m

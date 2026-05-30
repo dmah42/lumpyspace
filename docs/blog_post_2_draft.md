@@ -1,4 +1,4 @@
-## Weighing the Universe: Adding BAO and the "Tabula Rasa" Matter Density
+## Weighing the Universe: Matter, Constraints, and Spatial Inhomogeneity
 
 In my [previous post](https://hamon.dev/blog/lumpyspace/), I explored how a
 Physics-Informed Neural Network (PINN) could learn the 4D metric tensor of the
@@ -9,175 +9,192 @@ in a vacuum universe.
 
 But a vacuum universe is a spherical cow[^0]. And Supernovae, while excellent
 standard candles, only give us part of the story. They provide luminosity
-distances, which act as a proxy for the expansion history of the universe. To
-really constrain the geometry, we needed a 3D ruler.
+distances, which act as a proxy for the expansion history of the universe.
 
-Enter **Baryon Acoustic Oscillations (BAO)**.
+### From Vacuum to Matter
 
-### Bypassing Cosmic Chronometers
+In my first experiment, the vacuum universe was mathematically stable and fit
+the EFE and supernova data. However, it did so by falling into a contracting
+regime where space actively shrank ($H < 0$), utilizing extreme shear near the
+present day as a mathematical cheat code.
 
-We chose not to use cosmic chronometers for a very specific reason. Cosmic
-chronometers measure the Hubble parameter $H(z)$ directly by looking at the
-relative ages of passively evolving galaxies. While incredibly useful, the
-[standard 32-point Cosmic Chronometers dataset](https://arxiv.org/abs/1604.00183)
-has a critical assumption baked in: isotropy. The data averages $H(z)$ across
-all sky coordinates. Since our PINN previously discovered an anisotropic
-universe expanding at different rates along different axes to mimic Dark Energy,
-testing against a 1D, spherically-averaged $H(z)$ curve would explicitly erase
-the very physics we just discovered!
+While a pure vacuum geometry can technically satisfy the data and the field
+equations, it is physically unrealistic (our universe actually has stuff in
+it[^1]). If we want the model to discover a realistic cosmology without falling
+into contracting local minima, we have to give it the physical vocabulary to
+do so: **Matter**.
 
-### The Tension of the Vacuum
+### A Bounded Parameterization for $\Omega_m$
 
-BAO observations give us a standard ruler based on the clustering of matter left
-over from the sound waves of the early universe. I added the SDSS BAO dataset to
-the training loop to force the network to fit both distance measures
-simultaneously.
+Normally, in $\Lambda$CDM cosmology, we would plug in a fixed value like
+$\Omega_m \approx 0.3$ (about 30% matter, most of which is Dark Matter), a
+standard assumption validated by the Planck 2018 results. But we want the
+network to dynamically discover the matter density that best balances the field
+equations against the data.
 
-#### Anisotropic BAO Ray-Tracing
+So, instead of hardcoding a value, I introduced a trainable matter density
+parameter, $\Omega_m$, which represents the matter density fraction today. 
 
-Supernovae only give us a 1D luminosity distance along the light cone. But BAO
-is a 3D standard ruler. In a universe where expansion is different along
-different directions, we can't just compute a single radial distance. We have to
-separate the transverse distance ($D_M$) and the radial distance ($D_H = 1/H$)
-and handle the anisotropy directly.
+To prevent the optimizer from taking the lazy way out by bloating $\Omega_m$ to
+$1.0$ (or higher) to escape into a smooth, homogeneous, matter-heavy metric, we
+must restrict $\Omega_m$ to the strict physical window $[0.05, 0.3]$. BBN
+anchors our lower baryonic limit at $\approx 0.05$, and gravitational lensing and
+galaxy dynamics anchor the maximum (incorporating dark matter) at $\approx 0.3$.
 
-To do this, I implemented an anisotropic ray-tracing system in
-src/physics/geodesics.py. Instead of shooting in one direction, the physics
-engine shoots null geodesics backwards from the observer along all three
-principal spatial axes ($x, y, z$). For each axis, it integrates the geodesic
-equations to find:
+We enforce this strict physical window and ensure healthy training dynamics
+using two techniques:
 
-1. The path trajectories.
-2. The redshift $z$ at each point.
-3. The transverse distance $D_M$ from the radial coordinate.
-4. The directional Hubble parameter $H_{dir}(z)$ from the spatial metric
-   derivatives to get the radial distance $D_H = 1/H_{dir}(z)$.
-
-We then average these directions to get the final averaged distances, comparing
-them against the SDSS DR12 dataset using its full covariance matrix. 
-
-This directional ray-tracing also solved a major headache. At the very start of
-training, the metric is near-Minkowski, meaning the expansion rate $H \approx 0$.
-This caused $D_H = 1/H$ to explode to a massive $10^{11}$ code units,
-immediately blowing up the gradients and crashing the training. I fixed this by
-capping the unitless radial distance $D_H$ at the spatial boundary limit
-($10,000$ Mpc in physical scale) to keep the solver stable until it gets
-moving.
-
-### The Ricci Contraction Optimisation
-
-Evaluating General Relativity constraints inside a neural network is incredibly
-challenging[^2]. To compute the Einstein Field Equations, the physics engine has
-to compute second-order derivatives of the network's metric to get both the
-Ricci tensor ($R_{\mu\nu}$) and the Ricci scalar ($R$). 
-
-In the earlier version, JAX was computing the Ricci scalar by running a
-separate, independent automatic differentiation trace over the metric. This
-meant JAX had to compile and run redundant backpropagation sweeps. I optimized
-this in src/training/loss.py by contracting the metric inverse with the already
-computed Ricci tensor ($R = g^{\mu\nu} R_{\mu\nu}$ using `jnp.einsum`). By
-bypassing the redundant AD pass, the step time dropped significantly, and
-combined with gentler learning rate kicks, the training run finally became fast
-and stable.
-
-But immediately, the training broke down. The loss landscape became incredibly
-rugged, and the gradients were fighting each other because we were forcing the
-network to do the impossible. The BAO and Supernova data explicitly demand a
-specific expansion history. But under General Relativity (the EFE), a pure
-vacuum universe _wants_ to decelerate. By forcing the network to fit the data
-using only a vacuum geometry, we were making it contort space and time using
-extreme shear just to survive. The tension between the data loss and the physics
-loss was tearing the optimizer apart.
-
-If we want the model to fit the observations without breaking Einstein's
-equations, we have to give it the physical vocabulary to do so[^1]: **Matter**.
-
-### The Tabula Rasa Philosophy
-
-Normally, in $\Lambda$CDM cosmology, we'd plug in $\Omega_m \approx 0.3$ (about
-30% matter, most of which is Dark Matter), a standard assumption validated by
-the [Planck 2018 results](https://doi.org/10.1051/0004-6361/201833910). But that
-violates the core philosophy of this project: The ultimate goal is to find a
-geometry that satisfies the data with _no prior assumptions_. We want to weigh
-the universe without putting our thumb on the scale.
-
-So, instead of hardcoding $\Omega_m$, I introduced a trainable matter density
-parameter, `kappa_rho_0` ($\kappa \rho_0$).
-
-This parameter acts as a pressureless dust field that dilutes as the spatial
-volume of the universe changes ($V \propto \sqrt{\gamma}$). By subtracting this
-matter field's Stress-Energy tensor ($T_{\mu\nu}$) from the Einstein tensor
-($G_{\mu\nu}$), the physics loss can account for the presence of mass.
-
-Because `kappa_rho_0` is a native network parameter, Equinox automatically
-calculates its gradients. The network is now free to dynamically "discover" the
-matter density that best balances the EFE against the Supernova and BAO data!
-
-### The Dark Matter Challenge
-
-To make this a true test of the cosmological physics, I decided to start the
-universe with $\Omega_m = 0.05$, representing a universe with only Baryonic
-(normal) matter and zero Dark Matter. 
-
-If the network can satisfy the observable universe and the EFE with only
-baryonic matter, it will do so. If not, it will be forced to dynamically
-increase $\Omega_m$ to "discover" Dark Matter. 
-
-In early runs, when the EFE loss spiked, the optimizer took the lazy way out: it
-bloated $\Omega_m$ up to $1.0$ (and higher) to escape into a smooth,
-homogeneous, matter-heavy metric. But in no physical reality is
-$\Omega_m > 0.35$. BBN anchors our lower baryonic limit at $\approx 0.05$, and
-gravitational lensing and galaxy cluster dynamics anchor the maximum (with dark
-matter) at $\approx 0.3$. 
-
-So we must enforce this strict physical window $[0.05, 0.3]$:
-
-1. **The Double Softplus Bounding:**
-   Normally, one might use a sigmoid function to clamp a parameter between two
-   limits. But the sigmoid function has a vanishing gradient near its
-   boundaries, which acts as an artificial restoring force, pushing the
-   parameter back towards the middle (0.175) and making it very hard to touch
-   the pure baryonic boundary.
+1. **Projected Gradient Descent & Decoupled Optimization:**
+   Initially, I tried bounding the parameter using smooth mathematical mappings
+   (like sigmoids or double softplus functions). However, these create vanishing
+   gradient zones near the boundaries. It was impossible to tell if the model 
+   was even trying to drop $\Omega_m$ as the gradients locked the parameter.
    
-   Instead, I implemented a **double softplus** mapping:
-   $$\Omega_m = 0.05 + \text{softplus}(\theta) - \text{softplus}(\theta - 0.25)$$
-   This function has a constant gradient of $\approx 1.0$ in the middle range,
-   and only caps smoothly using softplus near the boundaries.
-   
-   However, forcing a newborn universe to live on a strict baryon-only diet from
-   step zero creates a massive numerical bottleneck. Because the network had to
-   fit the expansion data immediately under starvation conditions, it developed
-   premature coordinate rips that crashed the geodesic solver. To resolve this,
-   we initialize the parameter $\theta$ to $3.0$ (starting near the dark matter
-   ceiling of $\Omega_m \approx 0.3$). This gives the model a smooth,
-   homogeneous runway to gradually grow spatial gradients as the matter density
-   descends.
+   To fix this, we stripped away the mappings and optimized the raw $\Omega_m$
+   parameter directly, strictly clipping it to $[0.05, 0.3]$ after each step
+   using Projected Gradient Descent (PGD).
+
+   But there was another hurdle: the network is a 4-layer, 64-width MLP with
+   thousands of parameters, while $\Omega_m$ is a single scalar. During global
+   norm gradient clipping (`optax.clip_by_global_norm`), the massive
+   dimensionality of the MLP completely swallowed the scalar's gradient updates,
+   starving it of any movement. To solve this, we decoupled the optimization.
+   Using `optax.multi_transform`, we gave $\Omega_m$ its own dedicated optimizer
+   chain with a 100x boosted learning rate and no global norm clipping. This
+   allowed the matter density to finally participate in the optimization fairly.
+
+   I debated the initialization of $\Omega_m$ as it might bias the model a
+   priori to favour Dark Matter or to avoid it. Ultimately, we initialize 
+   $\Omega_m$ exactly at the dark matter ceiling of $0.3$. This gives the 
+   newborn universe a smooth, mathematically stable runway to fit the
+   expansion data initially, before the EFE residuals might learn to force it to
+   develop spatial inhomogeneities and drag the matter density down to the
+   baryonic floor.
 
 2. **The Dynamic Cosmology Coupling:**
-   Normally, one might assume a static floor of $\kappa\rho_0 = 3\Omega_m H_0^2$
-   with $H_0 \approx 1$. However, because the network is dynamically deriving
-   the expansion rate $H(t)$, using a static approximation of $H_0$ is a
-   physical inconsistency.
-   
-   To correct this, I coupled the matter density coefficient dynamically to the
-   model's own derived expansion rate today, $H_{mean}(1.0)$:
-   $$\kappa \rho_0 = \Omega_m \cdot 3 \cdot H_{mean}(1.0)^2$$
-   This ensures that the boundary constraints remain physically self-consistent
-   at every training step.
+   Normally, in standard cosmological models, one might assume a fixed value
+   for the present-day matter density $\kappa\rho_0$, or assume a static
+   relation like $\kappa\rho_0 = 3\Omega_m H_0^2$ using a constant
+   approximation for the Hubble parameter (e.g., $H_0 \approx 1$). However,
+   since our network dynamically learns the space-time geometry and derives the
+   expansion rate $H(t)$ from the metric itself, assuming a static $H_0$ would
+   introduce a severe physical inconsistency.
 
-### Results
+   To ensure that the trainable parameter $\Omega_m$ remains physically
+   meaningful and bounded within $[0.05, 0.3]$, we must dynamically couple the
+   energy density $\kappa\rho_0$ to the model's own derived expansion rate 
+   today, $H_{\text{mean}}(1.0)$:
 
-[Place results here once training converges, including the final value of
-kappa_rho_0, the directional Hubble parameters, the shear scalar behavior,
-and the physical interpretation of whether the network "invented" Dark
-Matter.]
+   $$\kappa \rho_0 = 3 \cdot \Omega_m \cdot H_{\text{mean}}(1.0)^2$$
+
+   By calculating $H_{\text{mean}}(1.0)$ from the spatial metric components at
+   each training step, this coupling ensures that the matter density parameter
+   $\Omega_m$ we tune is exactly the physical density fraction today. As the
+   universe expands, this pressureless dust field dilutes as a function of the
+   spatial metric determinant ($V \propto \sqrt{\gamma}$). By subtracting
+   this matter field's Stress-Energy tensor ($T_{\mu\nu}$) from the Einstein
+   tensor ($G_{\mu\nu}$), the physics loss can account for the presence
+   of mass.
+
+### Enforcing the Weak Energy Condition
+
+When matter density is added to the system, general relativity expects it to
+behave physically. In comoving coordinates, pressureless dust has a
+Stress-Energy tensor trace of $T = -\rho$. The contracted Einstein Field
+Equations then dictate:
+
+$$R = \kappa \rho$$
+
+Since physical matter density must be non-negative ($\rho \ge 0$), the local
+spacetime curvature (the Ricci scalar $R$) must also be non-negative ($R \ge 0$)
+everywhere.
+
+However, because the neural network only minimizes EFE residuals, it initially
+found an unphysical shortcut: it created regions of negative Ricci curvature
+($R < 0$, corresponding to negative energy density) to fit the accelerating
+expansion of the supernovae without dark energy. To prevent this, I added a
+squared flat minimum penalty to the EFE loss:
+
+$$\mathcal{L}_{\text{WEC}} = \text{mean}(\min(R, 0.0)^2)$$
+
+This enforces the Weak Energy Condition smoothly, leaving physical
+positive-curvature regions completely unbothered while shutting down any
+negative-mass cheat codes.
+
+### Results and Physical Interpretation
+
+With the physical constraints and decoupled optimizer active, we ran the
+supernova-only training loop. To understand what kind of universe the model
+discovered, we examine the convergence profile, the directional expansion
+rates over time, and the spatial maps today ($t=1.0$).
+
+#### 1. The Optimization Trajectory: Shedding Dark Matter
+
+The first question is: how does the network tune the matter density when given
+the freedom to do so?
+
+![Global Convergence and Matter Density Evolution](monitor_training_files/monitor_training_1_0.png)
+
+As shown in the bottom panel above, the dynamically optimized $\Omega_m$
+parameter plummeted from its $0.3$ initialization (the dark matter ceiling)
+straight down to the baryonic floor of $\approx 0.05$.
+
+This is a profound result. When the optimizer is forced to reconcile the
+supernova data with the Einstein Field Equations, it actively rejects the
+presence of dark matter. It finds that the field equations are much easier
+to satisfy if the universe is dominated by spatial inhomogeneities rather than
+a smooth, heavy background of cold dark matter.
+
+#### 2. Cosmic Shear and Anisotropic Expansion
+
+Next, we look at how the expansion rate evolves over coordinate time $t$ (from
+the early universe at $t=-4.0$ to today at $t=1.0$):
+
+![Directional Hubble Expansion and Shear Scalar over Time](monitor_training_files/monitor_training_2_1.png)
+
+The plots reveal a highly dynamic and anisotropic expansion history:
+* **Diverging Hubble Rates**: In the left panel, the directional expansion
+  rates ($H_x, H_y, H_z$) begin tightly clustered in the early universe,
+  reflecting our isotropic boundary conditions. However, as time progresses,
+  they diverge dramatically. Today ($t=1.0$), the expansion is fast in some
+  directions and slow in others.
+* **Late-Time Shear Peak**: The right panel shows the shear scalar
+  $\sigma^2(t)$ peaking near the present day. Because shear enters the
+  field equations as an effective energy density term with negative pressure,
+  this late-time spike in shear is precisely the mechanism the network uses
+  to mimic the accelerating expansion rate normally attributed to Dark Energy.
+
+#### 3. Spatial Curvature and Shear Maps Today
+
+To visualize the three-dimensional geometry of the universe today, we mapped
+the shear scalar $\sigma^2$ and the Ricci curvature scalar $R$ across all three
+principal planes ($x$-$y$, $y$-$z$, and $x$-$z$, with the third coordinate set
+to 0):
+
+![2D Spatial Maps of Shear and Ricci Curvature Today](monitor_training_files/monitor_training_4_0.png)
+
+These maps reveal a clear and fascinating picture of spatial inhomogeneity:
+* **The Curvature Dipole**: The Ricci scalar curvature $R$ (bottom row) is not
+  uniform; it forms a distinct spatial gradient (a cosmic dipole) swinging from
+  flat/negative regions to positively curved regions. This represents a
+  massive spatial inhomogeneity (a "lumpy" density distribution) along our
+  line of sight that the model has developed natively from the data.
+* **Inhomogeneous Shear**: The shear scalar $\sigma^2$ (top row) peaks in
+  specific spatial lobes, aligning with the directional expansion gradients.
+
+By letting the matter density and metric evolve freely under pure General
+Relativity, the network independently demonstrated that the Pantheon+
+supernova data can indeed be fit without a cosmological constant (Dark
+Energy) *and* without Dark Matter, provided we allow the universe to be
+inhomogeneous and anisotropic along our line of sight.
+
+It is worth noting that to a neural network, the laws of physics are merely
+suggestions. Because our WEC penalty (and our assumption of zero shear in
+the early universe) are implemented as *soft* constraints, the optimizer
+strikes a mathematical compromise. There is a slight residual negative
+curvature and non-zero early shear in the final plots as the network
+balances physical laws against the raw data loss. More on this next...
 
 [^0]: and, more importantly, doesn't give us anywhere to leave our stuff!
 
 [^1]: and ourselves somewhere to live.
-
-[^2]: understatement.
-
-[^3]: but not us, sadly.
-
-[^4]: did you see what i did there?

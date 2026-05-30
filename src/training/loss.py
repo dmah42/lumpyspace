@@ -52,7 +52,11 @@ def get_efe_loss(
   # Physics Residual (G_mu_nu - 8*pi*G * T_mu_nu = 0)
   residual = g_mu_nu - t_mu_nu
 
-  return jnp.mean(jnp.square(residual))
+  # Enforce the Weak Energy Condition by penalizing negative Ricci scalar
+  # (R = kappa * rho >= 0) using standard squared minimum penalty.
+  wec_penalty = jnp.square(jnp.minimum(r_scalar, 0.0))
+
+  return jnp.mean(jnp.square(residual)) + wec_penalty
 
 
 def get_data_loss(

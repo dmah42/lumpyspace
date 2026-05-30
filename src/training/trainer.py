@@ -43,7 +43,7 @@ def train_model(
   learning_rate: float = 1e-4,
   target_loss: float = 1e-6,
   patience: int = 500,
-  kick_period: int = 1000,
+  kick_period: int = 200,
   peak_learning_rate: float = 1e-3,
   log_path: str | None = "logs/training_metrics.csv",
   checkpoint_path: str | None = None,
@@ -70,10 +70,20 @@ def train_model(
 
     return learning_rate + (peak_learning_rate - learning_rate) * cosine_val
 
-  # Use gradient clipping to stabilize training
-  optimizer = optax.chain(
-    optax.clip_by_global_norm(1.0), optax.adam(lr_schedule)
-  )
+  # Use gradient clipping to stabilize training for the MLP,
+  # but allow Omega_m to learn independently to avoid being suppressed.
+  def label_fn(tree):
+    labels = jax.tree_util.tree_map(lambda _: "mlp", tree)
+    return eqx.tree_at(
+      lambda m: m.omega_m_raw, labels, "omega", is_leaf=lambda x: x is None
+    )
+
+  optimizers = {
+    "mlp": optax.chain(optax.clip_by_global_norm(1.0), optax.adam(lr_schedule)),
+    "omega": optax.adam(lambda s: lr_schedule(s) * 100.0),
+  }
+
+  optimizer = optax.multi_transform(optimizers, label_fn)
   opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
 
   sn_data, bao_data = data
@@ -108,7 +118,12 @@ def train_model(
       l_sn = get_data_loss(model, sn_z, sn_mu, sn_err)
 
       # 3. BAO Loss (3D Chi-squared)
-      l_bao = get_bao_loss(model, bao_z, bao_dm, bao_dh, bao_cov)
+      l_bao = jax.lax.cond(
+        w_bao > 0.0,
+        lambda _: get_bao_loss(model, bao_z, bao_dm, bao_dh, bao_cov),
+        lambda _: jnp.array(0.0),
+        operand=None,
+      )
 
       total_loss = w_efe * l_phys + w_sn * l_sn + w_bao * l_bao
       return total_loss, {
@@ -123,14 +138,15 @@ def train_model(
       model
     )
 
-    # Scale the gradient of the trainable matter density parameter to overcome
-    # the suppression caused by the dimensionality of the MLP weights during
-    # global norm clipping.
-    boosted_kappa_grad = grads.kappa_rho_0 * 80.0
-    grads = eqx.tree_at(lambda m: m.kappa_rho_0, grads, boosted_kappa_grad)
-
-    updates, opt_state = optimizer.update(grads, opt_state, model)
+    updates, opt_state = optimizer.update(
+      grads, opt_state, eqx.filter(model, eqx.is_array)
+    )
     model = eqx.apply_updates(model, updates)
+
+    # Projected Gradient Descent: enforce physical bounds [0.05, 0.3]
+    model = eqx.tree_at(
+      lambda m: m.omega_m_raw, model, jnp.clip(model.omega_m_raw, 0.05, 0.3)
+    )
     return model, opt_state, loss, metrics
 
   # Training State for early stopping
