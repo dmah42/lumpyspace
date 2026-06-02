@@ -36,7 +36,7 @@ def geodesic_system(
 
   # Regularize metric to ensure invertibility during early training
   g = metric_fn(coords)
-  g_reg = g + jnp.eye(4) * 1e-6
+  g_reg = g + jnp.eye(4) * 1e-12
   g_inv = jnp.linalg.inv(g_reg)
   dg = jac_fn(coords)
 

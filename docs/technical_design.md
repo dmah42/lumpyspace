@@ -287,6 +287,13 @@ To prevent the metric network from exploiting unobserved gaps in the coordinate 
     *   *Brute-Force Uniform Sampling:* Increasing uniform sampling (e.g., to 1024 points) is JIT-friendly but computationally expensive and still statistically vulnerable.
 *   **The Solution (Active Redshift Prioritization):** We utilize a non-uniform probability distribution for sampling coordinate time $t$ during the EFE loss calculation. We partition the sample budget (e.g., 256 points) to place 70% of the coordinate points in the "active redshift region" $t \in [-1.5, 1.0]$ where the distance observations reside, and the remaining 30% uniformly across the rest of the domain $[-4.0, -1.5]$. This increases the sampling density in the critical region by over 2.5x without blowing up the global compute budget, effectively blocking the network from hiding singularities near the light cone.
 
+### 6.6 Non-Linear Coordinate Mappings & Mixed Tensor Formulation
+Transitioning from a linear time mapping ($t=-z$) to a non-linear mapping (e.g., $t=5a-4$) introduces severe optimization challenges for the PINN:
+*   **Coordinate Variance of the EFE:** The covariant Einstein tensor $G_{\mu\nu}$ scales heavily with the coordinate choice. Under $t=5a-4$, the covariant residual $G_{tt} - T_{tt}$ is artificially amplified at high redshifts compared to $t=-z$. 
+*   **The Mixed Tensor Solution:** To decouple the optimization landscape from the arbitrary choice of $t$, we compute the EFE residual using **Mixed Tensors**: $G^\mu_\nu - 8\pi G T^\mu_\nu = 0$. For a dust universe, $T^t_t = -\rho$ exactly, rendering the target perfectly coordinate-invariant.
+*   **The Physical Sampling Trap:** Even with mixed tensors, the physical density $\rho$ scales as $a^{-3}$. At $t=-3.5$ ($z=9$), the squared EFE residual is $10^6$ times larger than today. Because the loss is calculated as a `jnp.mean`, increasing the *density* of sampled points in the early universe will cause this $10^6$ magnitude to completely overwhelm the optimizer, destroying late-time metrics (like the WEC penalty). 
+*   **The Conclusion:** It is physically impossible to safely extend the sampling domain to high redshifts (e.g., to fully cover the $z \approx 2.3$ Supernova data) without implementing **Dynamic Gradient Balancing** (Task 4.7) or Relative Weighting (e.g., dividing the residual by $a(t)^4$). Without this balancing, the massive physical gradients from the early universe will inevitably drown out the late-time WEC and observational losses.
+
 ---
 
 ## 7. Testing & Validation

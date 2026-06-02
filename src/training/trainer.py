@@ -34,6 +34,7 @@ def _get_log_writer(log_path: str | None, resume: bool = False):
           "l_sn",
           "l_bao",
           "omega_m",
+          "lambda_wec",
         ],
       )
       if not (resume and file_exists):
@@ -175,6 +176,7 @@ def train_model(
   patience_counter = 0
 
   start_step = 0
+  start_lambda_wec = 0.0
   if resume and log_path:
     if os.path.exists(log_path) and os.path.getsize(log_path) > 0:
       try:
@@ -182,6 +184,7 @@ def train_model(
           reader = list(csv.DictReader(f))
           if reader:
             start_step = int(reader[-1]["step"]) + 10
+            start_lambda_wec = float(reader[-1]["lambda_wec"])
       except Exception as e:
         print(f"Warning: Could not parse last step from log: {e}")
 
@@ -194,7 +197,7 @@ def train_model(
     print("Starting training (logging disabled)...")
 
   # Initialize Augmented Lagrangian multipliers and scaling parameter
-  lambda_wec_val = jnp.array(0.0)
+  lambda_wec_val = jnp.array(start_lambda_wec)
   w_wec_val = jnp.array(w_wec)
 
   with _get_log_writer(log_path, resume=resume) as writer_context:
@@ -203,13 +206,13 @@ def train_model(
       # We sample coordinates across the physical domain [-4.0, 1.0]
       # to ensure the metric is constrained well beyond the supernova data.
       k1, k2, k3 = jax.random.split(subkey, 3)
-      # 70% of 256 = 180 points in the active redshift region [-1.5, 1.0]
-      t_active = jax.random.uniform(k1, (180, 1), minval=-1.5, maxval=1.0)
-      # 30% of 256 = 76 points in the rest of the domain [-4.0, -1.5]
-      t_inactive = jax.random.uniform(k2, (76, 1), minval=-4.0, maxval=-1.5)
+      # 250/3.5 ~ 71.4 points per unit redshift
+      t_active = jax.random.uniform(k1, (250, 1), minval=-2.5, maxval=1.0)
+      # 30/0.7 ~ 40 points per unit redshift
+      t_inactive = jax.random.uniform(k2, (30, 1), minval=-3.2, maxval=-2.5)
       t_coords = jnp.concatenate([t_active, t_inactive], axis=0)
 
-      spatial_coords = jax.random.uniform(k3, (256, 3), minval=-1.0, maxval=1.0)
+      spatial_coords = jax.random.uniform(k3, (280, 3), minval=-1.0, maxval=1.0)
       coords = jnp.concatenate([t_coords, spatial_coords], axis=1)
 
       model, opt_state, _, metrics = step(
@@ -247,6 +250,7 @@ def train_model(
             "l_sn": f"{float(metrics['l_sn']):.6e}",
             "l_bao": f"{float(metrics['l_bao']):.6e}",
             "omega_m": f"{float(metrics['omega_m']):.6e}",
+            "lambda_wec": f"{float(lambda_wec_val):.6e}",
           }
         )
         log_file.flush()
@@ -255,9 +259,8 @@ def train_model(
         print(
           f"Step {current_step}, Loss: {current_loss:.6e} | "
           f"L_EFE: {float(metrics['l_phys']):.3e} | "
-          f"L_WEC: {float(metrics['l_wec']):.3e} | "
-          f"lambda: {float(lambda_wec_val):.3f} | "
-          f"w_wec: {float(w_wec_val):.1f}"
+          f"L_SN: {float(metrics['l_sn']):.3e} | "
+          f"L_WEC: {float(metrics['l_wec']):.3e}"
         )
 
       # Early Stopping & Safety Checks

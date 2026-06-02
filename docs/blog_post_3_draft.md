@@ -1,6 +1,6 @@
 ---
 title: "lumpyspace part 3: calling the physics cops"
-date: 2026-05-30
+date: 2026-05-31
 draft: false
 tags: ["machine learning", "neural networks", "physics", "cosmology", "general relativity"]
 ---
@@ -44,9 +44,9 @@ To fix this, we made two key changes:
 
 #### Linear Violation Penalty
 We changed the penalty term from quadratic to linear:
-$$
-\mathcal{L}_{\text{WEC}} = \text{mean}(\max(0.0, -R))
-$$
+
+$$\mathcal{L}_{\text{WEC}} = \text{mean}(\max(0.0, -R))$$
+
 Because this function is linear for negative values, its gradient is a
 constant non-zero step function. The network receives the exact same, strong
 restorative gradient regardless of whether it is slightly violating the WEC
@@ -64,8 +64,7 @@ Inside our JIT-compiled training loop, the Lagrange multiplier dynamically
 accumulates at every single optimization step based on the remaining WEC
 violation:
 
-$$\lambda_{\text{WEC}} \leftarrow \lambda_{\text{WEC}} + w_{\text{WEC}}
-\mathcal{L}_{\text{WEC}}$$
+$$\lambda_{\text{WEC}} \leftarrow \lambda_{\text{WEC}} + w_{\text{WEC}} \mathcal{L}_{\text{WEC}}$$
 
 If the network attempts to violate the WEC, the multiplier
 $\lambda_{\text{WEC}}$ climbs higher and higher, acting as a feedback loop that
@@ -79,7 +78,7 @@ $\lambda_{\text{WEC}} = 0$ and setting the penalty scale $w_{\text{WEC}} = 10.0$
 
 #### Complete WEC Compliance
 
-During training, the WEC loss ($\mathcal{L}_{\text{WEC}}$) plummeted rapidly.
+During training, the WEC loss ($\mathcal{L}\_{\text{WEC}}$) plummeted rapidly.
 Between steps 650 and 690, the telemetry logged a value of exactly
 **`0.000000e+00`**. 
 
@@ -104,7 +103,7 @@ absolute success. In the $x$-$y$ and $y$-$z$ planes, the minimum value is
 exactly `0.00`. In the $x$-$z$ plane, the minimum is `0.008`. The negative-mass
 shortcuts have been completely erased.
 
-And yet, $\Omega_m$ was still driven straight to the baryonic floor of `0.05`.
+And yet, $\Omega\_m$ was still driven straight to the baryonic floor of `0.05`.
 Even under strict general relativity, the universe rejects the homogeneous Dark
 Matter assumption.
 
@@ -121,7 +120,7 @@ or slightly negative in the past ($t = -4.0$). In the right panel, the shear
 scalar ($\sigma^2(t)$) bends back up to $\approx 8 \times 10^{-5}$ at $t =
 -4.0$. 
 
-As the matter density is so low ($\Omega_m = 0.05$), the universe in the past
+As the matter density is so low ($\Omega\_m = 0.05$), the universe in the past
 ($t \in [-4.0, -1.5]$) behaves like a vacuum. Without a heavy background of
 matter to drive cosmic expansion and deceleration, and because we have no
 observational supernova data in the far past (Supernovae only go up to

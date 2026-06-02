@@ -38,7 +38,7 @@ def get_efe_loss(
   spatial_metric = g[1:4, 1:4]
   gamma = jnp.linalg.det(spatial_metric)
   # Protect against negative/zero determinant during early training
-  gamma = jnp.maximum(gamma, 1e-6)
+  gamma = jnp.maximum(gamma, 1e-24)
 
   # Extract trainable matter density parameter from the model
   # Enforce Weak Energy Condition and a dynamic Baryonic matter floor
@@ -49,8 +49,12 @@ def get_efe_loss(
   # In comoving coordinates, dust only has energy density (T_00 = rho * -g_00)
   t_mu_nu = t_mu_nu.at[0, 0].set(current_density * -g[0, 0])
 
-  # Physics Residual (G_mu_nu - 8*pi*G * T_mu_nu = 0)
-  residual = g_mu_nu - t_mu_nu
+  # Compute mixed tensors (G^m_n and T^m_n) for coordinate invariance
+  g_mixed = jnp.matmul(g_inv, g_mu_nu)
+  t_mixed = jnp.matmul(g_inv, t_mu_nu)
+
+  # Physics Residual (G^m_n - 8*pi*G * T^m_n = 0)
+  residual = (g_mixed - t_mixed) * gamma
 
   # Enforce the Weak Energy Condition by penalizing negative Ricci scalar
   # (R = kappa * rho >= 0) using a linear absolute violation penalty to

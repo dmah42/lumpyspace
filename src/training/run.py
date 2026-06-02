@@ -64,7 +64,7 @@ def run_training(
     log_path=log_path,
     kick_period=200,
     patience=1000,
-    peak_learning_rate=1.5e-4,
+    peak_learning_rate=1e-4,
     checkpoint_path=checkpoint_path,
     key=train_key,
     w_efe=w_efe,

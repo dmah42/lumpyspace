@@ -86,4 +86,6 @@ def normalize_coordinates(z: jnp.ndarray) -> jnp.ndarray:
   Scale: z=0 -> t=1.0, z=1.0 -> t=0.0
   Equation: t = 1.0 - z
   """
-  return 1.0 - z
+  a = 1 / (1 + z)
+  return (a * 5.0) - 4.0
+  # return 1.0 - z
