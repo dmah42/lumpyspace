@@ -7,17 +7,23 @@ from collections.abc import Callable
 import jax
 import jax.numpy as jnp
 
+from src.core.metric import MetricNN
 from src.core.tensors import get_ricci_tensor
 from src.physics.geodesics import get_bao_distances, get_luminosity_distance
 
 PLANCK_RD_MPC = 147.09
 
 
+def apply_spatial_weight(loss_val: jnp.ndarray, w: jnp.ndarray) -> jnp.ndarray:
+  """Applies homoscedastic uncertainty weighting."""
+  return 0.5 * jnp.exp(-2.0 * w) * loss_val + w
+
+
 def get_efe_loss(
-  metric_fn: Callable[[jnp.ndarray], jnp.ndarray],
+  model: MetricNN,
   coords: jnp.ndarray,
   kappa_rho_0: float,
-) -> tuple[jnp.ndarray, jnp.ndarray]:
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
   """
   Computes the residual of the Einstein Field Equations:
   G_mu_nu - 8*pi*G * T_mu_nu = 0
@@ -25,9 +31,9 @@ def get_efe_loss(
   For the FLRW control, we assume a vacuum or perfect fluid.
   Here we minimize the Einstein Tensor residual directly.
   """
-  g = metric_fn(coords)
+  g = model(coords)
   g_inv = jnp.linalg.inv(g)
-  r_mu_nu = get_ricci_tensor(metric_fn, coords)
+  r_mu_nu = get_ricci_tensor(model, coords)
   r_scalar = jnp.einsum("mn,mn->", g_inv, r_mu_nu)
 
   # Einstein Tensor G_mu_nu = R_mu_nu - 0.5 * R * g_mu_nu
@@ -56,12 +62,16 @@ def get_efe_loss(
   # Physics Residual (G^m_n - 8*pi*G * T^m_n = 0)
   residual = (g_mixed - t_mixed) * gamma
 
-  # Enforce the Weak Energy Condition by penalizing negative Ricci scalar
-  # (R = kappa * rho >= 0) using a linear absolute violation penalty to
-  # ensure non-vanishing gradients.
-  wec_penalty = jnp.maximum(0.0, -r_scalar)
+  # Evaluate spatial weight
+  w_4d = model.get_spatial_weight(coords)[0]
 
-  return jnp.mean(jnp.square(residual)), wec_penalty
+  # Raw EFE residual
+  raw_residual_loss = jnp.mean(jnp.square(residual))
+
+  # Enforce the Weak Energy Condition by penalizing negative Ricci scalar
+  wec_penalty_raw = jnp.maximum(0.0, -r_scalar)
+
+  return raw_residual_loss, wec_penalty_raw, w_4d
 
 
 def get_data_loss(

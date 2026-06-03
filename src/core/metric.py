@@ -17,6 +17,7 @@ class MetricNN(eqx.Module):
   """
 
   mlp: eqx.nn.MLP
+  spatial_weight_net: eqx.nn.MLP
   omega_m_raw: jnp.ndarray
 
   def __init__(self, key: jax.random.PRNGKey):
@@ -32,13 +33,23 @@ class MetricNN(eqx.Module):
     )
 
     # Initialize trainable matter density parameter directly.
-    # Start exactly at 0.3 (dark matter ceiling).
+    # Start with dark matter to see where we go.
     self.omega_m_raw = jnp.array([0.3])
 
     # Initialize the final layer to be NEAR Minkowski.
     # We add tiny random noise to avoid the 'perfect' zero-derivative
     # trap that causes NaN gradients in the solver.
-    k1, k2 = jax.random.split(key)
+    k1, k2, k_spatial = jax.random.split(key, 3)
+
+    # 4 inputs (t, x, y, z), 1 output (w_4d)
+    self.spatial_weight_net = eqx.nn.MLP(
+      in_size=4,
+      out_size=1,
+      width_size=16,
+      depth=2,
+      activation=jnp.tanh,
+      key=k_spatial,
+    )
 
     def seed_layer(layer, l_key):
       if isinstance(layer, eqx.nn.Linear):
@@ -56,6 +67,12 @@ class MetricNN(eqx.Module):
     new_layers = list(self.mlp.layers)
     new_layers[last_idx] = seed_layer(new_layers[last_idx], k2)
     self.mlp = eqx.tree_at(lambda m: m.layers, self.mlp, tuple(new_layers))
+
+  def get_spatial_weight(self, coords: jnp.ndarray) -> jnp.ndarray:
+    """
+    Evaluates the learned spatial weight at the given 4D coordinates.
+    """
+    return self.spatial_weight_net(coords)
 
   def get_cosmology_today(self) -> tuple[jnp.ndarray, jnp.ndarray]:
     """

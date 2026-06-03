@@ -11,7 +11,12 @@ import jax
 import jax.numpy as jnp
 import optax
 
-from src.training.loss import get_bao_loss, get_data_loss, get_efe_loss
+from src.training.loss import (
+  apply_spatial_weight,
+  get_bao_loss,
+  get_data_loss,
+  get_efe_loss,
+)
 
 
 @contextmanager
@@ -35,6 +40,7 @@ def _get_log_writer(log_path: str | None, resume: bool = False):
           "l_bao",
           "omega_m",
           "lambda_wec",
+          "mean_w_spatial",
         ],
       )
       if not (resume and file_exists):
@@ -124,9 +130,24 @@ def train_model(
       v_efe_loss = jax.vmap(
         lambda c: get_efe_loss(model, c, kappa_rho_0_today[0])
       )
-      l_phys_vals, l_wec_vals = v_efe_loss(coords)
-      l_phys = jnp.mean(l_phys_vals)
-      l_wec = jnp.mean(l_wec_vals)
+      l_phys_raw_vals, l_wec_raw_vals, w_4d_vals = v_efe_loss(coords)
+
+      # Compute point-wise Augmented Lagrangian penalty for WEC
+      al_penalty_raw_vals = (
+        lambda_wec_val * l_wec_raw_vals + 0.5 * w_wec_val * (l_wec_raw_vals**2)
+      )
+
+      # Total raw physics error per point
+      total_phys_raw_vals = w_efe * l_phys_raw_vals + al_penalty_raw_vals
+
+      # Apply the 4D Spatial Curriculum point-wise
+      weighted_phys_vals = apply_spatial_weight(total_phys_raw_vals, w_4d_vals)
+      total_weighted_phys = jnp.mean(weighted_phys_vals)
+
+      # Means for logging and lambda update
+      l_phys = jnp.mean(l_phys_raw_vals)
+      l_wec = jnp.mean(l_wec_raw_vals)
+      mean_w_spatial = jnp.mean(w_4d_vals)
 
       # 2. Data Loss (Supernova chi-squared)
       l_sn = get_data_loss(model, sn_z, sn_mu, sn_err)
@@ -139,14 +160,9 @@ def train_model(
         operand=None,
       )
 
-      # Total Loss using the Augmented Lagrangian Method to enforce WEC
-      total_loss = (
-        w_efe * l_phys
-        + w_sn * l_sn
-        + w_bao * l_bao
-        + lambda_wec * l_wec
-        + 0.5 * w_wec * (l_wec**2)
-      )
+      # Total Loss seamlessly integrates the spatially weighted physical errors
+      # (EFE + AL WEC) with the global data losses.
+      total_loss = total_weighted_phys + w_sn * l_sn + w_bao * l_bao
       return total_loss, {
         "loss": total_loss,
         "l_phys": l_phys,
@@ -154,6 +170,7 @@ def train_model(
         "l_sn": l_sn,
         "l_bao": l_bao,
         "omega_m": omega_m_today[0],
+        "mean_w_spatial": mean_w_spatial,
       }
 
     (loss, metrics), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(
@@ -251,6 +268,7 @@ def train_model(
             "l_bao": f"{float(metrics['l_bao']):.6e}",
             "omega_m": f"{float(metrics['omega_m']):.6e}",
             "lambda_wec": f"{float(lambda_wec_val):.6e}",
+            "mean_w_spatial": f"{float(metrics['mean_w_spatial']):.6e}",
           }
         )
         log_file.flush()

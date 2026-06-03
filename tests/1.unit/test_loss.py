@@ -76,13 +76,18 @@ def test_efe_loss_minkowski():
       kappa_rho_0 = omega_m * 3.0 * 0.0**2
       return kappa_rho_0, omega_m
 
+    def get_spatial_weight(self, coords):
+      return jnp.array([0.0])
+
   metric_fn = MinkowskiMetric()
 
   # Evaluate at an arbitrary coordinate point
   coords = jnp.array([0.5, 0.0, 0.0, 0.0])
 
   kappa_rho_0_arr, _ = metric_fn.get_cosmology_today()
-  efe_loss, wec_penalty = get_efe_loss(metric_fn, coords, kappa_rho_0_arr[0])
+  efe_loss, wec_penalty, w_4d = get_efe_loss(
+    metric_fn, coords, kappa_rho_0_arr[0]
+  )
 
   assert not jnp.isnan(efe_loss), "EFE loss returned NaN."
   assert not jnp.isnan(wec_penalty), "WEC penalty returned NaN."
@@ -183,11 +188,51 @@ def test_efe_loss_negative_curvature(monkeypatch):
     def __call__(self, coords):
       return jnp.diag(jnp.array([-1.0, 1.0, 1.0, 1.0]))
 
+    def get_spatial_weight(self, coords):
+      return jnp.array([0.0])
+
   metric_fn = MockMetric()
   coords = jnp.array([1.0, 0.0, 0.0, 0.0])
   kappa_rho_0 = 0.1
 
-  _, wec_penalty = get_efe_loss(metric_fn, coords, kappa_rho_0)
+  _, wec_penalty, _ = get_efe_loss(metric_fn, coords, kappa_rho_0)
 
-  # For R = -2.0, the linear penalty should be exactly 2.0 (not 4.0!)
+  # For R = -2.0, the linear penalty raw is 2.0.
   assert jnp.allclose(wec_penalty, 2.0, atol=1e-6)
+
+
+def test_efe_loss_positivity(monkeypatch):
+  """
+  Verifies that get_efe_loss always returns strictly non-negative raw residuals
+  and WEC penalties, even when the spatial weight W is extremely negative.
+  This ensures that the AL multiplier and telemetry only receive valid data.
+  """
+  import src.training.loss
+
+  def mock_ricci_tensor(metric_fn, coords):
+    # This mock produces a negative Ricci scalar (R = -2.0)
+    return jnp.diag(jnp.array([0.5, -0.5, -0.5, -0.5]))
+
+  monkeypatch.setattr(src.training.loss, "get_ricci_tensor", mock_ricci_tensor)
+
+  class MockMetric:
+    def __call__(self, coords):
+      return jnp.diag(jnp.array([-1.0, 1.0, 1.0, 1.0]))
+
+    def get_spatial_weight(self, coords):
+      # Extreme negative weight which would cause the homoscedastic formula
+      # 0.5 * exp(-2W) * L + W to become highly negative if L is small.
+      return jnp.array([-5.0])
+
+  metric_fn = MockMetric()
+  coords = jnp.array([1.0, 0.0, 0.0, 0.0])
+  kappa_rho_0 = 0.1
+
+  raw_residual_loss, wec_penalty_raw, _ = get_efe_loss(
+    metric_fn, coords, kappa_rho_0
+  )
+
+  # The raw returned values must NEVER be negative, as they are fed to the AL
+  # constraint and telemetry logger.
+  assert raw_residual_loss >= 0.0, "Raw residual loss must be non-negative!"
+  assert wec_penalty_raw >= 0.0, "Raw WEC penalty must be non-negative!"
