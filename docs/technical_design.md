@@ -85,12 +85,12 @@ We must enforce physical constraints in the early universe ($t \le -3.0$, corres
 Because shear mathematically grows as $a^{-6}$ when integrating backwards in time, any non-zero shear today must be vanishingly small in the early universe, or it would explode and blatantly violate CMB observations. Furthermore, because our model broke Bianchi Type I symmetry by developing a spatial curvature dipole, shear is a 4D field $\sigma^2(t, x, y, z)$.
 
 **The Implementation:**
-To ground the metric, we enforce a localized prior in the early universe domain ($t \le -3.0$). At each sampled coordinate in this region, we compute and penalize three terms:
+To ground the metric, we enforce a localized prior as a strict boundary condition in the deep past ($t \in [-4.0, -3.9]$). At each sampled coordinate in this narrow slice, we compute and penalize three terms:
 1. **The Expansion Prior:** $\mathcal{L}_{\text{expand}} = \max(0, -H_{\text{mean}})$. The universe must be expanding ($H_{\text{mean}} > 0$).
 2. **The Isotropy Prior (Zero Shear):** $\mathcal{L}_{\text{shear}} = \sigma^2$. The local scalar shear must be penalized to zero.
 3. **Spatial Homogeneity:** $\mathcal{L}_{\text{spatial}} = \sum (\partial_i g_{\mu\nu})^2$. Spatial gradients of the metric must be near zero to prevent massive curvature dipoles that would conflict with the $10^{-5}$ density perturbations inferred from the CMB.
 
-Applying these penalties at $t \le -3.0$ acts as a boundary condition. If the universe is forced to be isotropic and homogeneous at $z=10$, the Einstein Field Equations will naturally propagate that smoothness backwards to the CMB epoch, preventing the unphysical "past drifts" without explicitly simulating the numerically stiff plasma dynamics at $z=1100$.
+These constraints are enforced as Hard Boundary Constraints using the Augmented Lagrangian method. Applying these penalties at $t \in [-4.0, -3.9]$ acts as a discrete boundary snapshot. To connect this boundary to the late universe, the Einstein Field Equations are sampled continuously down to $t=-4.0$. The massive $10^6$ scale gradients produced by the EFE at this redshift are dynamically absorbed by the 4D Spatial Curriculum, allowing the network to safely backpropagate the CMB boundary conditions to the present without exploding gradients.
 
 ---
 
@@ -289,11 +289,10 @@ implement a shifted softplus parameterization with a dynamically scaled floor.
 ### 6.5 EFE Coordinate Sampling & Active Redshift Region Prioritization
 To prevent the metric network from exploiting unobserved gaps in the coordinate space to build unphysical coordinate singularities (e.g. "gravitational redshift pumps" designed to fake expansion history), we implement a hierarchical sampling scheme for the training domain.
 
-*   **The Problem (Adversarial Singularities):** Under uniform sampling of coordinate time $t \in [-4.0, 1.0]$, a narrow coordinate singularity (width $\approx 0.1$) can easily hide in the gaps between the 128 sampled EFE training points. The network exploits this to generate the required observational redshift in a single violent contraction-expansion bounce, while keeping the rest of the metric flat and static to artificially minimize EFE loss.
-*   **Tradeoffs in Mitigation Strategies:**
-    *   *Surgical Geodesic Sampling:* Enforcing EFE constraints directly on the coordinates of the geodesic solver's output rays offers perfect efficiency but creates a highly complex compilation graph with nested metric dependency (EFE gradients evaluated on metric-dependent trajectories), leading to extreme JAX compile times and unstable gradients.
-    *   *Brute-Force Uniform Sampling:* Increasing uniform sampling (e.g., to 1024 points) is JIT-friendly but computationally expensive and still statistically vulnerable.
-*   **The Solution (Active Redshift Prioritization):** We utilize a non-uniform probability distribution for sampling coordinate time $t$ during the EFE loss calculation. We partition the sample budget (e.g., 256 points) to place 70% of the coordinate points in the "active redshift region" $t \in [-1.5, 1.0]$ where the distance observations reside, and the remaining 30% uniformly across the rest of the domain $[-4.0, -1.5]$. This increases the sampling density in the critical region by over 2.5x without blowing up the global compute budget, effectively blocking the network from hiding singularities near the light cone.
+*   **The Problem (Adversarial Singularities):** Under sparse uniform sampling of coordinate time $t$, a narrow coordinate singularity (width $\approx 0.1$) can easily hide in the gaps between points. The network exploits this to generate the required observational redshift in a single violent contraction-expansion bounce. Furthermore, the early universe ($t \in [-4.0, -2.5]$) exhibits extremely steep, sharp geometric warping that will be mathematically aliased if not resolved with high point density.
+*   **The Solution (Massive Resolution Bumping):** We utilize a dense, two-tiered sampling strategy to fully utilize GPU compute headroom while guaranteeing physical resolution across all epochs:
+    *   **Active Supernova Region:** We pack **500 points** into $t \in [-2.5, 1.0]$. Because $z=2.3$ maps to exactly $t=-2.485$, this tightly envelops the entirety of the Pantheon+ dataset, preventing the EFE from losing out to observational data.
+    *   **Deep Past Extension:** We pack another **500 points** into $t \in [-4.0, -2.5]$. This high resolution explicitly prevents aliasing in the steep early universe and safely stitches the Supernova domain to the CMB boundary condition ($t \in [-4.0, -3.9]$).
 
 ### 6.6 Non-Linear Coordinate Mappings & Mixed Tensor Formulation
 Transitioning from a linear time mapping ($t=-z$) to a non-linear mapping (e.g., $t=5a-4$) introduces severe optimization challenges for the PINN:
