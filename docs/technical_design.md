@@ -84,13 +84,40 @@ We must enforce physical constraints in the early universe ($t \le -3.0$, corres
 
 Because shear mathematically grows as $a^{-6}$ when integrating backwards in time, any non-zero shear today must be vanishingly small in the early universe, or it would explode and blatantly violate CMB observations. Furthermore, because our model broke Bianchi Type I symmetry by developing a spatial curvature dipole, shear is a 4D field $\sigma^2(t, x, y, z)$.
 
-**The Implementation:**
-To ground the metric, we enforce a localized prior as a strict boundary condition in the deep past ($t \in [-4.0, -3.9]$). At each sampled coordinate in this narrow slice, we compute and penalize three terms:
-1. **The Expansion Prior:** $\mathcal{L}_{\text{expand}} = \max(0, -H_{\text{mean}})$. The universe must be expanding ($H_{\text{mean}} > 0$).
-2. **The Isotropy Prior (Zero Shear):** $\mathcal{L}_{\text{shear}} = \sigma^2$. The local scalar shear must be penalized to zero.
-3. **Spatial Homogeneity:** $\mathcal{L}_{\text{spatial}} = \sum (\partial_i g_{\mu\nu})^2$. Spatial gradients of the metric must be near zero to prevent massive curvature dipoles that would conflict with the $10^{-5}$ density perturbations inferred from the CMB.
+**The Implementation (Phase 4 Spec):**
+To ground the metric, we enforce a localized prior as a strict boundary condition in the deep past ($t \in [-4.0, -3.990]$). Because this boundary slice is incredibly narrow, we will explicitly sample it using a smaller batch of `N_cmb = 50` points per step.
 
-These constraints are enforced as Hard Boundary Constraints using the Augmented Lagrangian method. Applying these penalties at $t \in [-4.0, -3.9]$ acts as a discrete boundary snapshot. To connect this boundary to the late universe, the Einstein Field Equations are sampled continuously down to $t=-4.0$. The massive $10^6$ scale gradients produced by the EFE at this redshift are dynamically absorbed by the 4D Spatial Curriculum, allowing the network to safely backpropagate the CMB boundary conditions to the present without exploding gradients.
+At each sampled coordinate in this narrow slice, we must compute the Extrinsic Curvature ($K_{ij}$) and the spatial metric ($g_{ij}$):
+1. Extract the $3 \times 3$ spatial metric: $g_{ij} = g[1:4, 1:4]$.
+2. Compute the spatial inverse: $g^{ij} = \text{jnp.linalg.inv}(g_{ij})$.
+3. Extract the lapse function: $N = \sqrt{-g_{00}}$.
+4. Compute the time derivative of the spatial metric: $\dot{g}_{ij} = \partial_t g_{ij}$ (extracted from `jax.jacfwd(metric)`).
+5. Calculate the Extrinsic Curvature: $K_{ij} = -\frac{1}{2N} \dot{g}_{ij}$.
+
+With these geometric primitives, we enforce three Augmented Lagrangian penalties, allowing for a realistic $\epsilon = 10^{-5}$ tolerance on the isotropy and homogeneity to prevent over-constraining the model:
+
+1. **The Expansion Prior ($H_{\text{mean}}$)**
+   - **Math**: The mean expansion rate is the trace of the extrinsic curvature. $H_{\text{mean}} = -\frac{1}{3} \text{Tr}(K^i_j) = -\frac{1}{3} (g^{ik} K_{kj})$.
+   - **Penalty**: $\mathcal{L}_{\text{expand}} = \max(0, -H_{\text{mean}})^2$. We square the ReLU to ensure $C^1$ continuity for the gradients.
+
+2. **The Isotropy Prior (Shear $\sigma^2$)**
+   - **Math**: The traceless shear tensor is $\sigma_{ij} = K_{ij} - \frac{1}{3} \text{Tr}(K) g_{ij}$. 
+   - **Scalar Formulation**: The shear scalar is $\sigma^2 = \frac{1}{2} \sigma_{ij} \sigma^{ij} = \frac{1}{2} (g^{ia} g^{jb} \sigma_{ij} \sigma_{ab})$.
+   - **Penalty**: $\mathcal{L}_{\text{shear}} = \max(0, \sigma^2 - 10^{-5})^2$.
+
+3. **Spatial Homogeneity (Curvature Gradients)**
+   - **Math**: We penalize the spatial gradients of all metric components. Let $\partial_k g_{\mu\nu}$ be the spatial Jacobian (derivatives with respect to $x, y, z$).
+   - **Penalty**: $\mathcal{L}_{\text{spatial}} = \max(0, \sum_{k=1}^3 \sum_{\mu,\nu=0}^3 (\partial_k g_{\mu\nu})^2 - 10^{-5})^2.
+
+**Augmented Lagrangian Architecture:**
+Because these three penalties represent distinct physical constraints, summing them under a single $\lambda$ multiplier would cause gradient imbalance (e.g., the network trades shear violation for expansion violation).
+*   **Independent Tracking**: The model state must be updated to track three separate `AdaptivePenaltyState` schedulers and three independent $\lambda$ multipliers (`lambda_cmb_expand`, `lambda_cmb_shear`, `lambda_cmb_spatial`).
+*   **Initialization**: Initialize all three penalties with a starting weight $w=1.0$ and $\lambda=0.0$.
+
+**Stitching the Boundary (EFE Overlap):**
+Applying these penalties at $t \in [-4.0, -3.990]$ acts as a discrete boundary snapshot. To connect this boundary to the late universe, the Einstein Field Equations (EFE) must be stitched seamlessly to it. Therefore, the continuous EFE sampling domain (`t_inactive`) must be extended down to $t=-3.990$. Because the EFE physical domain touches the CMB boundary, the differential equations will "grab" the expanding, isotropic boundary condition and mathematically propagate it forward through the unobserved region all the way into the active Supernova region.
+
+*Note on Stiffness*: Extending the EFE sampling down into the $-3.990$ region will introduce incredibly massive density gradients ($\rho(z) \propto (1+z)^3$). Testing the EFE extension (moving the `minval` from $-3.9$ to $-3.990$) to ensure the Spatial Curriculum can handle the mathematical stiffness without `NaN` explosions is a critical prerequisite before activating the CMB boundary loss.
 
 ---
 

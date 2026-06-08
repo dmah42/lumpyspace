@@ -152,8 +152,8 @@ def train_model(
     # Span = 3.5. 800 points -> ~228 points per unit redshift
     t_active = jax.random.uniform(k1, (800, 1), minval=-2.5, maxval=1.0)
 
-    # Span = 1.4. 200 points -> ~142 points per unit redshift
-    t_inactive = jax.random.uniform(k2, (200, 1), minval=-3.9, maxval=-2.5)
+    # Span = 1.49. 200 points -> ~134 points per unit redshift
+    t_inactive = jax.random.uniform(k2, (200, 1), minval=-3.99, maxval=-2.5)
 
     t_coords = jnp.concatenate([t_active, t_inactive], axis=0)
     spatial_coords = jax.random.uniform(k3, (1000, 3), minval=-1.0, maxval=1.0)
