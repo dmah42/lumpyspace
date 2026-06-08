@@ -12,3 +12,5 @@
 - **PINN Architecture:** SiREN activations should use `jnp.sin`.
 - **Metric Signature:** Lorentzian (-, +, +, +) must be strictly enforced in `MetricNN`.
 
+## State & Checkpointing
+- **Resumption Requirement:** Any time a stateful parameter is added to the training loop (e.g., AdaptivePenaltyState, EMA variables), it MUST be explicitly saved to the checkpoint `.meta` file and flawlessly restored upon `resume=True`.

@@ -11,12 +11,16 @@ import jax
 import jax.numpy as jnp
 import optax
 
+from src.training.checkpoint import TrainingState, load_meta, save_meta
 from src.training.loss import (
   apply_spatial_weight,
   get_bao_loss,
   get_data_loss,
   get_efe_loss,
 )
+from src.training.scheduler import AdaptivePenaltyState
+
+START_W_WEC = 1.0
 
 
 @contextmanager
@@ -39,13 +43,33 @@ def _get_log_writer(log_path: str | None, resume: bool = False):
           "l_sn",
           "l_bao",
           "omega_m",
-          "lambda_wec",
-          "mean_w_spatial",
         ],
       )
       if not (resume and file_exists):
         log_writer.writeheader()
       yield log_writer, log_file
+
+
+def save_checkpoint(
+  path: str,
+  model: eqx.Module,
+  step: int,
+  best_loss: float,
+  lambda_wec: float,
+  wec_scheduler: AdaptivePenaltyState,
+) -> None:
+  """Helper to serialize model leaves and meta state atomically."""
+  os.makedirs(os.path.dirname(path), exist_ok=True)
+  eqx.tree_serialise_leaves(path, model)
+  state: TrainingState = {
+    "step": step,
+    "best_loss": best_loss,
+    "lambda_wec": lambda_wec,
+    "w_penalty": wec_scheduler.w_penalty,
+    "ema_violation": wec_scheduler.ema_violation,
+    "last_check_violation": wec_scheduler.last_check_violation,
+  }
+  save_meta(path + ".meta", state)
 
 
 def train_model(
@@ -66,7 +90,7 @@ def train_model(
   w_efe: float = 1.0,
   w_sn: float = 10.0,
   w_bao: float = 0.5,
-  w_wec: float = 10.0,
+  adaptive_check_interval: int = 500,
   resume: bool = False,
 ) -> eqx.Module:
   """
@@ -110,7 +134,7 @@ def train_model(
   def step(
     model: eqx.Module,
     opt_state: optax.OptState,
-    coords: jnp.ndarray,
+    key: jax.Array,
     sn_z: jnp.ndarray,
     sn_mu: jnp.ndarray,
     sn_err: jnp.ndarray,
@@ -121,6 +145,20 @@ def train_model(
     lambda_wec: jnp.ndarray,
     w_wec: jnp.ndarray,
   ) -> tuple[eqx.Module, optax.OptState, jnp.ndarray, dict[str, jnp.ndarray]]:
+    # We sample coordinates across the physical domain [-4.0, 1.0]
+    # to ensure the metric is constrained well beyond the supernova data.
+    k1, k2, k3 = jax.random.split(key, 3)
+
+    # Span = 3.5. 800 points -> ~228 points per unit redshift
+    t_active = jax.random.uniform(k1, (800, 1), minval=-2.5, maxval=1.0)
+
+    # Span = 1.4. 200 points -> ~142 points per unit redshift
+    t_inactive = jax.random.uniform(k2, (200, 1), minval=-3.9, maxval=-2.5)
+
+    t_coords = jnp.concatenate([t_active, t_inactive], axis=0)
+    spatial_coords = jax.random.uniform(k3, (1000, 3), minval=-1.0, maxval=1.0)
+    coords = jnp.concatenate([t_coords, spatial_coords], axis=1)
+
     def loss_fn(model):
       # Compute matter density and Omega_m today in a single pass to avoid
       # redundant AD evaluations.
@@ -133,8 +171,8 @@ def train_model(
       l_phys_raw_vals, l_wec_raw_vals, w_4d_vals = v_efe_loss(coords)
 
       # Compute point-wise Augmented Lagrangian penalty for WEC
-      al_penalty_raw_vals = (
-        lambda_wec_val * l_wec_raw_vals + 0.5 * w_wec_val * (l_wec_raw_vals**2)
+      al_penalty_raw_vals = lambda_wec * l_wec_raw_vals + 0.5 * w_wec * (
+        l_wec_raw_vals**2
       )
 
       # Total raw physics error per point
@@ -194,16 +232,21 @@ def train_model(
 
   start_step = 0
   start_lambda_wec = 0.0
-  if resume and log_path:
-    if os.path.exists(log_path) and os.path.getsize(log_path) > 0:
-      try:
-        with open(log_path) as f:
-          reader = list(csv.DictReader(f))
-          if reader:
-            start_step = int(reader[-1]["step"]) + 10
-            start_lambda_wec = float(reader[-1]["lambda_wec"])
-      except Exception as e:
-        print(f"Warning: Could not parse last step from log: {e}")
+  start_w_wec = START_W_WEC
+  start_ema = 1.0
+  start_last_check = float("inf")
+
+  if resume and checkpoint_path:
+    latest_path = checkpoint_path.replace(".eqx", "_latest.eqx")
+    meta_path = latest_path + ".meta"
+    state = load_meta(meta_path)
+
+    start_step = state["step"]
+    best_loss = state["best_loss"]
+    start_lambda_wec = state["lambda_wec"]
+    start_w_wec = state["w_penalty"]
+    start_ema = state["ema_violation"]
+    start_last_check = state["last_check_violation"]
 
   if log_path:
     if resume and start_step > 0:
@@ -215,27 +258,21 @@ def train_model(
 
   # Initialize Augmented Lagrangian multipliers and scaling parameter
   lambda_wec_val = jnp.array(start_lambda_wec)
-  w_wec_val = jnp.array(w_wec)
+  w_wec_val = jnp.array(start_w_wec)
+  wec_scheduler = AdaptivePenaltyState(
+    w_penalty=start_w_wec,
+    ema_violation=start_ema,
+    last_check_violation=start_last_check,
+  )
 
   with _get_log_writer(log_path, resume=resume) as writer_context:
     for i in range(max_steps):
       key, subkey = jax.random.split(key)
-      # We sample coordinates across the physical domain [-4.0, 1.0]
-      # to ensure the metric is constrained well beyond the supernova data.
-      k1, k2, k3 = jax.random.split(subkey, 3)
-      # 250/3.5 ~ 71.4 points per unit redshift
-      t_active = jax.random.uniform(k1, (250, 1), minval=-2.5, maxval=1.0)
-      # 30/0.7 ~ 40 points per unit redshift
-      t_inactive = jax.random.uniform(k2, (30, 1), minval=-3.2, maxval=-2.5)
-      t_coords = jnp.concatenate([t_active, t_inactive], axis=0)
-
-      spatial_coords = jax.random.uniform(k3, (280, 3), minval=-1.0, maxval=1.0)
-      coords = jnp.concatenate([t_coords, spatial_coords], axis=1)
 
       model, opt_state, _, metrics = step(
         model,
         opt_state,
-        coords,
+        subkey,
         sn_z,
         sn_mu,
         sn_err,
@@ -249,6 +286,22 @@ def train_model(
 
       current_loss = float(metrics["loss"])
       current_step = start_step + i
+
+      # Update EMA for constraint violation and check for penalty bump
+      l_wec_val_scalar = float(metrics["l_wec"])
+      bumped = wec_scheduler.update(
+        l_wec_val_scalar,
+        i,
+        check_interval=adaptive_check_interval,
+      )
+
+      if bumped:
+        print(
+          f"Adaptive Penalty: w_wec bumped to {wec_scheduler.w_penalty:.1f} "
+          f"(EMA l_wec: {wec_scheduler.ema_violation:.6e})"
+        )
+
+      w_wec_val = jnp.array(wec_scheduler.w_penalty)
 
       # Update Augmented Lagrangian multiplier:
       # lambda <- lambda + mu * violation
@@ -267,19 +320,29 @@ def train_model(
             "l_sn": f"{float(metrics['l_sn']):.6e}",
             "l_bao": f"{float(metrics['l_bao']):.6e}",
             "omega_m": f"{float(metrics['omega_m']):.6e}",
-            "lambda_wec": f"{float(lambda_wec_val):.6e}",
-            "mean_w_spatial": f"{float(metrics['mean_w_spatial']):.6e}",
           }
         )
         log_file.flush()
 
       if i % 100 == 0:
         print(
-          f"Step {current_step}, Loss: {current_loss:.6e} | "
-          f"L_EFE: {float(metrics['l_phys']):.3e} | "
-          f"L_SN: {float(metrics['l_sn']):.3e} | "
-          f"L_WEC: {float(metrics['l_wec']):.3e}"
+          f"step {current_step}, loss: {current_loss:.6e} | "
+          f"l_efe: {float(metrics['l_phys']):.3e} | "
+          f"l_sn: {float(metrics['l_sn']):.3e} | "
+          f"l_wec: {float(metrics['l_wec']):.3e}"
         )
+
+        # Continually save the latest state so resumption never loses progress
+        if checkpoint_path:
+          latest_path = checkpoint_path.replace(".eqx", "_latest.eqx")
+          save_checkpoint(
+            latest_path,
+            model,
+            current_step,
+            best_loss,
+            float(lambda_wec_val),
+            wec_scheduler,
+          )
 
       # Early Stopping & Safety Checks
       if jnp.isnan(current_loss):
@@ -298,11 +361,29 @@ def train_model(
         patience_counter = 0
         if checkpoint_path:
           print(
-            f"Saving checkpoint with loss {current_loss:.6e} at step "
+            f"Saving best model with loss {current_loss:.6e} at step "
             f"{current_step}..."
           )
-          os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
-          eqx.tree_serialise_leaves(checkpoint_path, model)
+          save_checkpoint(
+            checkpoint_path,
+            model,
+            current_step,
+            best_loss,
+            float(lambda_wec_val),
+            wec_scheduler,
+          )
+
+          # Also update the latest checkpoint, because this is now the most
+          # recent state we have safely serialized to disk!
+          latest_path = checkpoint_path.replace(".eqx", "_latest.eqx")
+          save_checkpoint(
+            latest_path,
+            model,
+            current_step,
+            best_loss,
+            float(lambda_wec_val),
+            wec_scheduler,
+          )
       else:
         patience_counter += 1
 

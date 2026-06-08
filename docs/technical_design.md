@@ -247,6 +247,16 @@ Where:
 *   $\mu$ is the penalty parameter, which increases over training to penalize constraint violations more severely.
 *   **Tradeoffs:** Guarantees that the final converged metric strictly satisfies General Relativity. However, it requires careful tuning of $\mu$'s growth rate to prevent numerical instability.
 
+#### 6.2.4 Adaptive Penalty Scheduling
+To automate the tuning of the Augmented Lagrangian penalty parameter $\mu$ (e.g., `w_wec`), we implement an Adaptive Penalty Schedule in the outer Python training loop. This prevents the constraint from stalling in the late stages of training when the violation becomes extremely small.
+*   **The Algorithm:**
+    1. Define a check interval $N_{check}$ (e.g., every 500 steps).
+    2. At step $t = k \cdot N_{check}$, compare the current exponential moving average of the violation $\mathcal{L}_{k}$ against the violation at the previous check $\mathcal{L}_{k-1}$.
+    3. If the violation has not decreased by a sufficient margin (e.g., $\mathcal{L}_{k} > \tau \mathcal{L}_{k-1}$, where $\tau = 0.9$):
+        *   Multiply the penalty parameter by a growth factor: $\mu \leftarrow \gamma \mu$ (e.g., $\gamma = 1.5$ or $2.0$).
+    4. Cap $\mu$ at a massive maximum value (e.g., $10^5$) to prevent `NaN` explosions.
+*   **Implementation:** Because $\mu$ (e.g., `w_wec_val`) is passed to the JIT-compiled `step` function as a dynamic `jnp.ndarray`, we can seamlessly multiply it by $\gamma$ in the outer Python loop without triggering recompilation. This system will natively scale to handle multiple constraints (WEC, CMB Expansion, CMB Isotropy) independently.
+
 ### 6.3 Parameter Sensitivity & Gradient Boosting (The Scalar Multiplier)
 A major bottleneck when optimizing deep network parameters alongside single physical scalars (such as the trainable matter density $\kappa\rho_0$) is gradient scale imbalance.
 
@@ -290,9 +300,9 @@ implement a shifted softplus parameterization with a dynamically scaled floor.
 To prevent the metric network from exploiting unobserved gaps in the coordinate space to build unphysical coordinate singularities (e.g. "gravitational redshift pumps" designed to fake expansion history), we implement a hierarchical sampling scheme for the training domain.
 
 *   **The Problem (Adversarial Singularities):** Under sparse uniform sampling of coordinate time $t$, a narrow coordinate singularity (width $\approx 0.1$) can easily hide in the gaps between points. The network exploits this to generate the required observational redshift in a single violent contraction-expansion bounce. Furthermore, the early universe ($t \in [-4.0, -2.5]$) exhibits extremely steep, sharp geometric warping that will be mathematically aliased if not resolved with high point density.
-*   **The Solution (Massive Resolution Bumping):** We utilize a dense, two-tiered sampling strategy to fully utilize GPU compute headroom while guaranteeing physical resolution across all epochs:
-    *   **Active Supernova Region:** We pack **500 points** into $t \in [-2.5, 1.0]$. Because $z=2.3$ maps to exactly $t=-2.485$, this tightly envelops the entirety of the Pantheon+ dataset, preventing the EFE from losing out to observational data.
-    *   **Deep Past Extension:** We pack another **500 points** into $t \in [-4.0, -2.5]$. This high resolution explicitly prevents aliasing in the steep early universe and safely stitches the Supernova domain to the CMB boundary condition ($t \in [-4.0, -3.9]$).
+*   **The Solution (Massive Resolution Bumping & Density Ratio):** We utilize a dense, two-tiered sampling strategy to fully utilize GPU compute headroom while mathematically oversampling the Supernova domain:
+    *   **Active Supernova Region:** We pack **800 points** into $t \in [-2.5, 1.0]$. With a span of 3.5, this yields $\approx 228$ points per unit redshift. This heavily anchors the network to the Pantheon+ dataset.
+    *   **Deep Past Extension:** We pack **200 points** into $t \in [-4.0, -2.5]$. With a span of 1.5, this yields $\approx 133$ points per unit redshift. This is still a massive absolute resolution bump (preventing deep-past aliasing) but preserves the mathematical priority of the active region.
 
 ### 6.6 Non-Linear Coordinate Mappings & Mixed Tensor Formulation
 Transitioning from a linear time mapping ($t=-z$) to a non-linear mapping (e.g., $t=5a-4$) introduces severe optimization challenges for the PINN:

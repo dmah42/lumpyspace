@@ -13,7 +13,7 @@ from src.training.trainer import train_model
 
 
 def run_training(
-  max_steps: int = 10000,
+  max_steps: int = 20000,
   learning_rate: float = 1e-5,
   checkpoint_path: str = "checkpoints/pinn_metric.eqx",
   log_path: str = "logs/training_metrics.csv",
@@ -48,12 +48,14 @@ def run_training(
   # 3. Initialize Model
   print("Initializing 4D Metric PINN...")
   model = MetricNN(model_key)
-  resume = os.path.exists(checkpoint_path)
+  latest_path = checkpoint_path.replace(".eqx", "_latest.eqx")
+  resume = os.path.exists(latest_path)
+
   if resume:
-    print(f"Resuming training from checkpoint: {checkpoint_path}")
-    model = eqx.tree_deserialise_leaves(checkpoint_path, model)
+    print(f"Resuming training from latest checkpoint: {latest_path}")
+    model = eqx.tree_deserialise_leaves(latest_path, model)
   else:
-    print("No checkpoint found. Starting from scratch.")
+    print("No latest checkpoint found. Starting from scratch.")
 
   # 4. Run Training
   train_model(
@@ -63,7 +65,7 @@ def run_training(
     learning_rate=learning_rate,
     log_path=log_path,
     kick_period=200,
-    patience=1000,
+    patience=2000,
     peak_learning_rate=1e-4,
     checkpoint_path=checkpoint_path,
     key=train_key,
