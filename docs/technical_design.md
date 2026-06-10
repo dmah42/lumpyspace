@@ -122,7 +122,6 @@ Applying these penalties at $t \in [-4.0, -3.990]$ acts as a discrete boundary s
 ---
 
 ## 5. Phased Implementation Roadmap
-## 5. Exhaustive Phased Implementation Roadmap
 
 ### Phase 1: The FLRW Control Baseline (Verification & Calibration)
 **Goal:** Prove the 4D PINN architecture can perfectly recover the standard $\Lambda$CDM model. This serves as our "Control Group" to ensure the tensor engine and loss functions are bug-free.
@@ -182,10 +181,10 @@ Applying these penalties at $t \in [-4.0, -3.990]$ acts as a discrete boundary s
 ### Phase 4: Full Bianchi Training & Analysis (The Discovery Phase)
 **Goal:** Train the full 4D PINN on the Pantheon+ Supernova dataset and analyze for shear.
 
-*   **Task 4.1: Data Ingestion (`src/training/data.py`)**
+*   **Task 4.1: Data Ingestion (`src/training/data.py`) [COMPLETED]**
     *   Load `Pantheon+` Supernovae: $(z_{cmb}, \mu_{obs}, \sigma_\mu)$.
     *   Implement coordinate normalization: Map $z \in [0, 2]$ to $t \in [-1, 1]$.
-*   **Task 4.2: The Global Loss Optimizer**
+*   **Task 4.2: The Global Loss Optimizer [COMPLETED]**
     *   **Learning Rate Scheduler:** Implement an `optax.warmup_cosine_decay_schedule` to navigate the rugged Tabula Rasa loss landscape. The schedule must be parameterized (`warmup_steps`, `decay_steps`) to provide a sharp "kick" out of local minima followed by a smooth descent.
     *   **Optimizer:** Initialize `optax.chain(optax.clip_by_global_norm(1.0), optax.adam(lr_schedule))`.
     *   **The Training Loop:**
@@ -193,7 +192,16 @@ Applying these penalties at $t \in [-4.0, -3.990]$ acts as a discrete boundary s
         2.  Compute $G_{\mu\nu}$ at these points. Minimize $\|G_{\mu\nu}\|^2$ (assuming vacuum/dust).
         3.  Compute $d_L(z)$ via Task 3.2 for the Supernova redshifts.
         4.  Minimize $\chi^2 = \sum (\mu_{pred} - \mu_{obs})^2 / \sigma_\mu^2$.
-*   **Task 4.3: Deep Metric Extraction & Shear Analysis**
+
+*   **Task 4.3: Automated Hyperparameter Optimization (Gradient Balancing) [COMPLETED]**
+    *   **Goal:** Automate the tuning of the multi-probe loss weights ($w_{sn}$, $w_{bao}$) to prevent the physics loss ($G_{\mu\nu}=0$) and data losses from overwhelming each other.
+    *   **Implementation Options:**
+        1.  **Bayesian Optimization (Optuna/Ray Tune):** Wrapping the training loop in an external framework to run dozens of trials, hunting for the optimal static weights that minimize validation loss.
+            *   *Tradeoffs:* Highly robust and guaranteed to find stable static weights. However, it is computationally expensive (requires running the full PINN training loop dozens of times) and uses static weights that cannot adapt if the loss landscape changes drastically during training.
+        2.  **Self-Adaptive Loss Weights (The PINN Approach):** Making the weights ($w_{sn}$, $w_{bao}$) learnable parameters within the JAX/Equinox model itself. The loss function is modified to simultaneously minimize the residuals while maximizing the weights (e.g., $\mathcal{L} = \sum \frac{1}{2 w_i^2} \mathcal{L}_i + \log(w_i)$), allowing the optimizer to dynamically balance the gradients at every step.
+            *   *Tradeoffs & Failure Mode:* While computationally elegant, this method suffers from the "Lazy Optimizer" problem when applied to highly rigid differential equations like the EFE. If the metric initialization produces massive curvature gradients that are difficult to minimize, the optimizer finds it mathematically cheaper to simply drive $w_i \to \infty$. This zeros out the effective loss $\left( \frac{1}{2 w_i^2} \to 0 \right)$, stalling training completely. In our empirical testing, meticulously hand-tuned static hyperparameter weights proved far superior as they act as unyielding constraints that force the network to actually solve the PDEs.
+
+*   **Task 4.4: Deep Metric Extraction & Shear Analysis [IN PROGRESS]**
     *   **Goal:** Quantify the physical deviations from FLRW by extracting the shear tensor and expansion rates.
     *   **Implementation:**
         *   Compute the **Shear Tensor** $\sigma_{\mu\nu}$ using the first derivatives of the metric.
@@ -201,21 +209,15 @@ Applying these penalties at $t \in [-4.0, -3.990]$ acts as a discrete boundary s
         *   Extract the **Hubble Tensor** $H_{ij}$ and compare expansion rates along the x, y, and z axes.
         *   Generate the final **Hubble Diagram** showing the Pantheon+ fit, CC residuals, and shear evolution.
     *   **Success Criterion:** Identification of the primary expansion axis and its alignment with known cosmological structures (e.g., CMB dipole).
-*   **Task 4.4: Out-of-Sample Validation & The "Hubble Dipole" (Cosmic Chronometers)**
-    *   **Goal:** Verify the PINN-learned expansion history against independent, non-distance-ladder measurements, while accounting for the model's extreme spatial anisotropy.
-    *   **Implementation (Future Plan):**
-        *   *The Anisotropy Problem:* The standard 32-point Cosmic Chronometers dataset assumes isotropy by averaging $H(z)$ across all sky coordinates. Since our Tabula Rasa PINN predicts a universe expanding significantly faster along a preferred axis (mimicking Dark Energy via shear), testing against a 1D $H(z)$ curve would erase the very physics we discovered.
-        *   *The 3D Solution:* We must ingest the full CC dataset *including* the Right Ascension (RA) and Declination (Dec) of each galaxy. We will then shoot 3D null geodesics in those exact angular directions to extract the strictly directional expansion rate $H_{dir}(z) = -\frac{1}{1+z}\frac{dz}{d\tau}$ for each specific data point.
-    *   **Success Criterion:** If the highly anisotropic model fits the directional CC data better than a standard isotropic $\Lambda$CDM model, it provides strong observational evidence for the "Hubble Dipole" and anisotropic Dark Energy.
 
-*   **Task 4.5: Model Selection & Final Synthesis**
-    *   **Goal:** Statistically determine if the inhomogeneous model is superior to $\Lambda$CDM.
+*   **Task 4.5: Sparse Observational Datasets (Cosmic Chronometers & BAO) [REJECTED]**
+    *   **Goal:** Integrate additional temporal and distance measurements to further constrain the metric beyond Supernova data.
     *   **Implementation:**
-        *   Compute the **AIC (Akaike Information Criterion)** and **BIC (Bayesian Information Criterion)** for both the PINN and a standard FLRW fit.
-    *   **Success Criterion:** Final determination of whether the data statistically justifies a "lumpy" universe over a smooth one.
+        *   *Cosmic Chronometers (CC):* Utilizing directional $dt/dz$ measurements from passively evolving galaxies.
+        *   *Baryon Acoustic Oscillations (BAO):* Utilizing 3D standard ruler data derived from early universe plasma physics.
+    *   **Reason for Rejection:** Both the CC and BAO datasets are currently too sparse (e.g., ~30 high-quality CC data points) to provide a robust training signal. Incorporating them would risk overfitting the highly flexible 10-dimensional metric network to small-sample noise rather than generalized physical geometry.
 
-*   **Task 4.6: Future Directions & Additional Observational Probes**
-    *   *Baryon Acoustic Oscillations (BAO):* BAO provides an absolute distance scale (standard ruler) derived from the physics of the early universe plasma. Fitting the PINN against 3D BAO measurements (transverse vs. line-of-sight) would be the ultimate test of anisotropic geometry, as BAO measurements are highly sensitive to directional expansion.
+*   **Task 4.6: Advanced Probes & Geometries [COMPLETED]**
     *   *CMB Temperature Power Spectrum:* Mapping our 4D metric fluctuations to the CMB angular power spectrum to ensure the late-time shear does not violate the high-redshift isotropy of the CMB ($z \approx 1100$).
     *   *Inhomogeneous and Anisotropic Spacetimes (Szekeres):* Relaxing the
         Bianchi Type I symmetry to allow for full spatial inhomogeneity while
@@ -224,21 +226,23 @@ Applying these penalties at $t \in [-4.0, -3.990]$ acts as a discrete boundary s
         shear can simultaneously explain both the Hubble Tension and the
         illusion of Dark Energy.
 
-*   **Task 4.7: Automated Hyperparameter Optimization (Gradient Balancing)**
-    *   **Goal:** Automate the tuning of the multi-probe loss weights ($w_{sn}$, $w_{bao}$) to prevent the physics loss ($G_{\mu\nu}=0$) and data losses from overwhelming each other.
-    *   **Implementation Options:**
-        1.  **Bayesian Optimization (Optuna/Ray Tune):** Wrapping the training loop in an external framework to run dozens of trials, hunting for the optimal static weights that minimize validation loss.
-            *   *Tradeoffs:* Highly robust and guaranteed to find stable static weights. However, it is computationally expensive (requires running the full PINN training loop dozens of times) and uses static weights that cannot adapt if the loss landscape changes drastically during training.
-        2.  **Self-Adaptive Loss Weights (The PINN Approach):** Making the weights ($w_{sn}$, $w_{bao}$) learnable parameters within the JAX/Equinox model itself. The loss function is modified to simultaneously minimize the residuals while maximizing the weights (e.g., $\mathcal{L} = \sum \frac{1}{2 w_i^2} \mathcal{L}_i + \log(w_i)$), allowing the optimizer to dynamically balance the gradients at every step.
-            *   *Tradeoffs & Failure Mode:* While computationally elegant, this method suffers from the "Lazy Optimizer" problem when applied to highly rigid differential equations like the EFE. If the metric initialization produces massive curvature gradients that are difficult to minimize, the optimizer finds it mathematically cheaper to simply drive $w_i \to \infty$. This zeros out the effective loss $\left( \frac{1}{2 w_i^2} \to 0 \right)$, stalling training completely. In our empirical testing, meticulously hand-tuned static hyperparameter weights proved far superior as they act as unyielding constraints that force the network to actually solve the PDEs.
+*   **Task 4.7: Late-Time Isotropy Penalty (Galaxy Surveys) [FUTURE]**
+    *   **Goal:** Align the model's geometry with macroscopic observations of the local universe today ($t=0$).
+    *   **Implementation:** Observational data from all-sky local galaxy surveys (e.g., [2MASS](https://www.ipac.caltech.edu/2mass/)) indicates that the macroscopic distribution of matter and expansion is isotropic to within roughly 1% to 2%. To match this observation, we will implement a soft Augmented Lagrangian penalty at $t=0$. The penalty will only trigger if the variance between the directional Hubble parameters ($H_x, H_y, H_z$) exceeds a 2% threshold. This anchors the metric to the physical reality of the local universe while mathematically allowing for small, physically viable anisotropic solutions.
+
+*   **Task 4.8: Model Selection & Final Synthesis [PENDING]**
+    *   **Goal:** Statistically determine if the inhomogeneous model is superior to $\Lambda$CDM.
+    *   **Implementation:**
+        *   Compute the **AIC (Akaike Information Criterion)** and **BIC (Bayesian Information Criterion)** for both the PINN and a standard FLRW fit.
+    *   **Success Criterion:** Final determination of whether the data statistically justifies a "lumpy" universe over a smooth one.
 
 ---
 
-## 6. Advanced Training Dynamics: Batching & Gradient Balancing
+## 5. Advanced Training Dynamics: Batching & Gradient Balancing
 
 To transition the PINN training loop from a prototype to a production-grade optimization engine, we must address the computational complexity of the data loss and the inherent competition between the physics and observational objectives.
 
-### 6.1 Supernova Batching Design
+### 5.1 Supernova Batching Design
 Rather than evaluating all $1,701$ supernovae in the Pantheon+ dataset at each training step—which requires solving $1,701$ separate null geodesic ODEs backwards through time—we introduce stochastic batching of the observational data.
 
 *   **JAX-Compatible Sampling:** We define a static batch size $B$ (e.g., $B = 128$). At each step, we use `jax.random.choice` to sample $B$ indices from the dataset. By keeping the batch size constant, JAX's compilation engine (XLA) avoids recompilation.
@@ -247,14 +251,14 @@ Rather than evaluating all $1,701$ supernovae in the Pantheon+ dataset at each t
     *   `batch_z, batch_mu, batch_err = select_batch(sn_data, indices)`
     *   The loss is normalized by the batch size $B$ to maintain consistent gradient scaling across different choices of $B$.
 
-### 6.2 Hyperparameter Tuning & Gradient Balancing
+### 5.2 Hyperparameter Tuning & Gradient Balancing
 Physics-Informed Neural Networks often fail when the gradients of the physics loss ($\mathcal{L}_{Physics}$) and the data loss ($\mathcal{L}_{Data}$) have vastly different magnitudes. If one dominates, the optimizer will satisfy it at the absolute expense of the other.
 
-#### 6.2.1 Biasing Towards Physics (The Cosmological Constraint)
+#### 5.2.1 Biasing Towards Physics (The Cosmological Constraint)
 Because a metric that fits the supernova data but violates Einstein's Field Equations is physically meaningless, we must bias the optimization toward satisfying General Relativity. However, if the physics loss weight $w_{Physics}$ is set too high, the model quickly collapses into the trivial vacuum Minkowski metric (which has exactly zero curvature and zero physics loss) and refuses to ever move toward fitting the expansion of the universe.
 To prevent this, we propose two methods:
 
-#### 6.2.2 Option 1: Dynamic GradNorm (Gradient Norm Balancing)
+#### 5.2.2 Option 1: Dynamic GradNorm (Gradient Norm Balancing)
 We dynamically adjust the loss weights $w_i(t)$ at each training step $t$ to ensure the gradients of the physics and data losses remain in a physical proportion.
 *   **The Algorithm:**
     1.  At step $t$, compute the gradients of the model's final layer parameters with respect to each individual loss component: $G_{phys}(t) = \|\nabla_{\theta_{last}} (w_{phys} \mathcal{L}_{phys})\|_2$ and $G_{data}(t) = \|\nabla_{\theta_{last}} (w_{data} \mathcal{L}_{data})\|_2$.
@@ -264,7 +268,7 @@ We dynamically adjust the loss weights $w_i(t)$ at each training step $t$ to ens
         where $\bar{G}(t)$ is the mean gradient norm, and $\beta$ is a momentum hyperparameter (e.g., $0.1$).
 *   **Tradeoffs:** Automatically prevents either loss from "drowning out" the other, stabilizing training across the entire 10,000-step cycle. However, computing separate gradients for each loss component adds slight backpropagation overhead.
 
-#### 6.2.3 Option 2: Augmented Lagrangian (Hard Boundary Constraints)
+#### 5.2.3 Option 2: Augmented Lagrangian (Hard Boundary Constraints)
 We reformulate the training as a constrained optimization problem, treating the Einstein Field Equations as a hard constraint:
 $$\min_{\theta} \mathcal{L}_{Data}(\theta) \quad \text{subject to} \quad \mathcal{L}_{Physics}(\theta) \le \epsilon$$
 We optimize the Augmented Lagrangian:
@@ -274,7 +278,7 @@ Where:
 *   $\mu$ is the penalty parameter, which increases over training to penalize constraint violations more severely.
 *   **Tradeoffs:** Guarantees that the final converged metric strictly satisfies General Relativity. However, it requires careful tuning of $\mu$'s growth rate to prevent numerical instability.
 
-#### 6.2.4 Adaptive Penalty Scheduling
+#### 5.2.4 Adaptive Penalty Scheduling
 To automate the tuning of the Augmented Lagrangian penalty parameter $\mu$ (e.g., `w_wec`), we implement an Adaptive Penalty Schedule in the outer Python training loop. This prevents the constraint from stalling in the late stages of training when the violation becomes extremely small.
 *   **The Algorithm:**
     1. Define a check interval $N_{check}$ (e.g., every 500 steps).
@@ -284,7 +288,7 @@ To automate the tuning of the Augmented Lagrangian penalty parameter $\mu$ (e.g.
     4. Cap $\mu$ at a massive maximum value (e.g., $10^5$) to prevent `NaN` explosions.
 *   **Implementation:** Because $\mu$ (e.g., `w_wec_val`) is passed to the JIT-compiled `step` function as a dynamic `jnp.ndarray`, we can seamlessly multiply it by $\gamma$ in the outer Python loop without triggering recompilation. This system will natively scale to handle multiple constraints (WEC, CMB Expansion, CMB Isotropy) independently.
 
-### 6.3 Parameter Sensitivity & Gradient Boosting (The Scalar Multiplier)
+### 5.3 Parameter Sensitivity & Gradient Boosting (The Scalar Multiplier)
 A major bottleneck when optimizing deep network parameters alongside single physical scalars (such as the trainable matter density $\kappa\rho_0$) is gradient scale imbalance.
 
 *   **The Problem:** The network contains thousands of weights that determine the complex curvature profiles, making the loss highly sensitive to their changes. These weights dominate the global gradient vector. When `optax.clip_by_global_norm(1.0)` is applied, it divides the entire gradient vector by the global norm. Consequently, the gradient of the single scalar $\kappa\rho_0$ is scaled down to near-zero (e.g. $10^{-4}$), causing it to move extremely slowly over training steps.
@@ -298,7 +302,7 @@ A major bottleneck when optimizing deep network parameters alongside single phys
     ```
 *   **Physical Justification:** The matter density represents a global physical constant that should adjust rapidly to balance the EFE, while the metric network weights must adjust slowly and smoothly to avoid introducing singular coordinate ripples.
 
-### 6.4 Trainable Matter Density Parameterization & Dynamic Floor
+### 5.4 Trainable Matter Density Parameterization & Dynamic Floor
 To ensure the matter density parameter $\kappa\rho_0$ remains physically
 consistent without freezing optimization gradients near constraints, we
 implement a shifted softplus parameterization with a dynamically scaled floor.
@@ -323,7 +327,7 @@ implement a shifted softplus parameterization with a dynamically scaled floor.
     today. This ensures that the matter density bounds are physically
     consistent with the derived cosmology at each step of training.
 
-### 6.5 EFE Coordinate Sampling & Active Redshift Region Prioritization
+### 5.5 EFE Coordinate Sampling & Active Redshift Region Prioritization
 To prevent the metric network from exploiting unobserved gaps in the coordinate space to build unphysical coordinate singularities (e.g. "gravitational redshift pumps" designed to fake expansion history), we implement a hierarchical sampling scheme for the training domain.
 
 *   **The Problem (Adversarial Singularities):** Under sparse uniform sampling of coordinate time $t$, a narrow coordinate singularity (width $\approx 0.1$) can easily hide in the gaps between points. The network exploits this to generate the required observational redshift in a single violent contraction-expansion bounce. Furthermore, the early universe ($t \in [-4.0, -2.5]$) exhibits extremely steep, sharp geometric warping that will be mathematically aliased if not resolved with high point density.
@@ -331,25 +335,16 @@ To prevent the metric network from exploiting unobserved gaps in the coordinate 
     *   **Active Supernova Region:** We pack **800 points** into $t \in [-2.5, 1.0]$. With a span of 3.5, this yields $\approx 228$ points per unit redshift. This heavily anchors the network to the Pantheon+ dataset.
     *   **Deep Past Extension:** We pack **200 points** into $t \in [-4.0, -2.5]$. With a span of 1.5, this yields $\approx 133$ points per unit redshift. This is still a massive absolute resolution bump (preventing deep-past aliasing) but preserves the mathematical priority of the active region.
 
-### 6.6 Non-Linear Coordinate Mappings & Mixed Tensor Formulation
+### 5.6 Non-Linear Coordinate Mappings & Mixed Tensor Formulation
 Transitioning from a linear time mapping ($t=-z$) to a non-linear mapping (e.g., $t=5a-4$) introduces severe optimization challenges for the PINN:
 *   **Coordinate Variance of the EFE:** The covariant Einstein tensor $G_{\mu\nu}$ scales heavily with the coordinate choice. Under $t=5a-4$, the covariant residual $G_{tt} - T_{tt}$ is artificially amplified at high redshifts compared to $t=-z$. 
 *   **The Mixed Tensor Solution:** To decouple the optimization landscape from the arbitrary choice of $t$, we compute the EFE residual using **Mixed Tensors**: $G^\mu_\nu - 8\pi G T^\mu_\nu = 0$. For a dust universe, $T^t_t = -\rho$ exactly, rendering the target perfectly coordinate-invariant.
 *   **The Physical Sampling Trap:** Even with mixed tensors, the physical density $\rho$ scales as $a^{-3}$. At $t=-3.5$ ($z=9$), the squared EFE residual is $10^6$ times larger than today. Because the loss is calculated as a `jnp.mean`, increasing the *density* of sampled points in the early universe will cause this $10^6$ magnitude to completely overwhelm the optimizer, destroying late-time metrics (like the WEC penalty). 
 *   **The Conclusion:** It is physically impossible to safely extend the sampling domain to high redshifts (e.g., to fully cover the $z \approx 2.3$ Supernova data) without implementing **Dynamic Gradient Balancing** (Task 4.7) or Relative Weighting (e.g., dividing the residual by $a(t)^4$). Without this balancing, the massive physical gradients from the early universe will inevitably drown out the late-time WEC and observational losses.
 
----
+### 5.7 Spatially Adaptive Weighting (Solving the Coordinate Imbalance)
 
-## 7. Testing & Validation
-*   **Unit Tests:** Verify $g_{\mu\nu}$ symmetry and signature.
-*   **Symmetry Tests:** Check if the learned metric respects the requested Bianchi Type I spatial symmetries.
-*   **Performance:** Benchmark training speed. The RTX 5070 must handle $\sim 10^5$ collocation points per minute.
-
----
-
-## 6.7 Spatially Adaptive Weighting (Solving the Coordinate Imbalance)
-
-### The Problem: Non-Linear Mapping Imbalance
+#### The Problem: Non-Linear Mapping Imbalance
 While global parameters and physical $\gamma$ volume scaling correctly normalize
 the *physical* density ($a^{-3}$) across the universe, we still face an internal
 gradient imbalance due to the non-linear time coordinate mapping $t(z)$. Regions
@@ -360,7 +355,7 @@ local regions completely dominate the loss landscape, preventing the network
 from fine-tuning the easier regions (like the late universe, where the Supernova
 data sits) and preventing the WEC penalty from fully converging to `0.00`.
 
-### The Solution: Learned Spatial Weights $W(t)$
+#### The Solution: Learned Spatial Weights $W(t)$
 Instead of global scalar weights, we introduce a continuous, Learned Spatial
 Weighting network. By evaluating a tiny auxiliary neural network
 $W(t) \to \mathbb{R}$ at every collocation point, we allow the optimizer to
@@ -379,7 +374,7 @@ $$\mathcal{L}_{phys} = \frac{1}{N} \sum_{i=1}^N \left( \frac{1}{2} e^{-2 W(t_i)}
    decrease $W(t)$ in the hard regions to tackle them sequentially, acting as a
    completely automated spatial curriculum.
 
-### Architectural Implementation Details
+#### Architectural Implementation Details
 *   **The Network:** A very lightweight Multi-Layer Perceptron (e.g., 2 hidden
     layers of 16 neurons) appended as a submodule within `MetricNN`. 
 *   **Input:** Because the network has discovered an *inhomogeneous* cosmology
@@ -390,3 +385,10 @@ $$\mathcal{L}_{phys} = \frac{1}{N} \sum_{i=1}^N \left( \frac{1}{2} e^{-2 W(t_i)}
 *   **Optimization:** The $W(t, x, y, z)$ network parameters are updated
     simultaneously with the main metric weights. Because it is evaluated inside
     the spatial `jax.vmap` batch, it adds virtually zero computational overhead.
+
+---
+
+## 6. Testing & Validation
+*   **Unit Tests:** Verify $g_{\mu\nu}$ symmetry and signature.
+*   **Symmetry Tests:** Check if the learned metric respects the requested Bianchi Type I spatial symmetries.
+*   **Performance:** Benchmark training speed. The RTX 5070 must handle $\sim 10^5$ collocation points per minute.
