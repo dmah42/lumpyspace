@@ -201,7 +201,7 @@ Applying these penalties at $t \in [-4.0, -3.990]$ acts as a discrete boundary s
         2.  **Self-Adaptive Loss Weights (The PINN Approach):** Making the weights ($w_{sn}$, $w_{bao}$) learnable parameters within the JAX/Equinox model itself. The loss function is modified to simultaneously minimize the residuals while maximizing the weights (e.g., $\mathcal{L} = \sum \frac{1}{2 w_i^2} \mathcal{L}_i + \log(w_i)$), allowing the optimizer to dynamically balance the gradients at every step.
             *   *Tradeoffs & Failure Mode:* While computationally elegant, this method suffers from the "Lazy Optimizer" problem when applied to highly rigid differential equations like the EFE. If the metric initialization produces massive curvature gradients that are difficult to minimize, the optimizer finds it mathematically cheaper to simply drive $w_i \to \infty$. This zeros out the effective loss $\left( \frac{1}{2 w_i^2} \to 0 \right)$, stalling training completely. In our empirical testing, meticulously hand-tuned static hyperparameter weights proved far superior as they act as unyielding constraints that force the network to actually solve the PDEs.
 
-*   **Task 4.4: Deep Metric Extraction & Shear Analysis [IN PROGRESS]**
+*   **Task 4.4: Deep Metric Extraction & Shear Analysis [COMPLETED]**
     *   **Goal:** Quantify the physical deviations from FLRW by extracting the shear tensor and expansion rates.
     *   **Implementation:**
         *   Compute the **Shear Tensor** $\sigma_{\mu\nu}$ using the first derivatives of the metric.
@@ -288,44 +288,31 @@ To automate the tuning of the Augmented Lagrangian penalty parameter $\mu$ (e.g.
     4. Cap $\mu$ at a massive maximum value (e.g., $10^5$) to prevent `NaN` explosions.
 *   **Implementation:** Because $\mu$ (e.g., `w_wec_val`) is passed to the JIT-compiled `step` function as a dynamic `jnp.ndarray`, we can seamlessly multiply it by $\gamma$ in the outer Python loop without triggering recompilation. This system will natively scale to handle multiple constraints (WEC, CMB Expansion, CMB Isotropy) independently.
 
-### 5.3 Parameter Sensitivity & Gradient Boosting (The Scalar Multiplier)
-A major bottleneck when optimizing deep network parameters alongside single physical scalars (such as the trainable matter density $\kappa\rho_0$) is gradient scale imbalance.
+### 5.3 Parameter Sensitivity & Gradient Boosting (Optax Multi-Transform)
+A major bottleneck when optimizing deep network parameters alongside single physical scalars (such as the trainable matter density parameter $\Omega_m$) is gradient scale imbalance.
 
-*   **The Problem:** The network contains thousands of weights that determine the complex curvature profiles, making the loss highly sensitive to their changes. These weights dominate the global gradient vector. When `optax.clip_by_global_norm(1.0)` is applied, it divides the entire gradient vector by the global norm. Consequently, the gradient of the single scalar $\kappa\rho_0$ is scaled down to near-zero (e.g. $10^{-4}$), causing it to move extremely slowly over training steps.
-*   **The Solution (The "Fast Track" Boost):** Rather than raising the global learning rate (which destabilizes the network and causes NaN gradient explosions), we apply a dedicated gradient multiplier to $\kappa\rho_0$ in the training step:
-    $$\nabla_{\kappa\rho_0} \mathcal{L}_{Total} \leftarrow \eta \cdot \nabla_{\kappa\rho_0} \mathcal{L}_{Total}$$
-    where $\eta \in [10.0, 100.0]$ is a boosting factor (e.g. $\eta = 50.0$).
-*   **Implementation:** Inside the training JIT step, after computing `grads`, we use `equinox.tree_at` to scale `grads.kappa_rho_0` before passing it to the optimizer:
-    ```python
-    boosted_grad = grads.kappa_rho_0 * 50.0
-    grads = eqx.tree_at(lambda m: m.kappa_rho_0, grads, boosted_grad)
-    ```
-*   **Physical Justification:** The matter density represents a global physical constant that should adjust rapidly to balance the EFE, while the metric network weights must adjust slowly and smoothly to avoid introducing singular coordinate ripples.
+*   **The Problem:** The network contains thousands of weights that determine the complex curvature profiles, making the loss highly sensitive to their changes. When `optax.clip_by_global_norm(1.0)` is applied, it divides the entire gradient vector by the global norm. Consequently, the gradient of the single scalar $\Omega_m$ is scaled down to near-zero, causing it to move extremely slowly over training steps.
+*   **The Solution (Parameter Groups):** Rather than raising the global learning rate (which destabilizes the network), we use `optax.multi_transform` to split the parameters into separate optimization groups.
+*   **Implementation:** The metric network parameters are assigned to the `"mlp"` group (with global norm clipping and standard scheduling), while the $\Omega_m$ parameter is assigned to the `"omega"` group. The `"omega"` group receives a dedicated `optax.adam` optimizer with a raw `100.0x` multiplier applied to the base learning rate schedule, completely bypassing the global norm clipping bottleneck.
+*   **Physical Justification:** The matter density represents a global physical constant that must adjust rapidly early in training to broadly balance the EFE, while the spatial metric network weights must adjust slowly and smoothly to avoid introducing singular coordinate ripples.
 
 ### 5.4 Trainable Matter Density Parameterization & Dynamic Floor
-To ensure the matter density parameter $\kappa\rho_0$ remains physically
-consistent without freezing optimization gradients near constraints, we
-implement a shifted softplus parameterization with a dynamically scaled floor.
+To ensure the matter density remains physically consistent without freezing optimization gradients near constraints, we rely on Projected Gradient Descent (PGD) clipping rather than complex softplus mappings.
 
-*   **The Problem (Gradient Freezing):** In early versions, a hard baryonic
-    floor was enforced via `jnp.maximum(kappa_rho_0, floor)`. However, if the
-    parameter dropped below the constraint, the gradient of the loss with
-    respect to the parameter became exactly zero, permanently trapping the
-    parameter in a coordinate lock.
-*   **The Solution (Softplus Parameterization):** We map a raw unconstrained
-    parameter $\theta \in \mathbb{R}$ to the physical density parameter
-    $\kappa\rho_0$ via a shifted softplus function:
-    $$\kappa\rho_0 = \text{Baryonic Floor} + \text{softplus}(\theta)$$
-    Because the derivative of `softplus(x)` is `sigmoid(x)` (which is non-zero
-    everywhere), the gradient path remains active for all values of $\theta$.
-*   **Dynamic Baryonic Floor:** Rather than defining the floor using a static
-    approximation of $H_0 \approx 1$ (e.g. $0.05 \times 3 = 0.15$), the floor
-    is scaled dynamically by the model's derived expansion rate today
-    $H_{mean}(1.0)$:
-    $$\text{Baryonic Floor} = 3 \cdot \Omega_b \cdot H_{mean}(1.0)^2$$
-    where $\Omega_b = 0.05$ represents the minimum baryonic matter density
-    today. This ensures that the matter density bounds are physically
-    consistent with the derived cosmology at each step of training.
+*   **The Parameter:** Instead of directly training the raw physical density $\kappa\rho_0$, the model's only trainable physical scalar is $\Omega_m$ (via `omega_m_raw`).
+*   **The Problem (Gradient Freezing vs. Complexity):** In early versions, complex shifted-softplus mappings were used to enforce baryonic minimums. However, these warped the local loss landscape and slowed convergence. 
+*   **The Solution (PGD Clipping):** We allow the optimizer to update `omega_m_raw` freely during the backpropagation step. Then, in the outer training loop (after the optimizer update), we enforce strict physical boundaries using Projected Gradient Descent:
+    ```python
+    model = eqx.tree_at(
+        lambda m: m.omega_m_raw, 
+        model, 
+        jnp.clip(model.omega_m_raw, 0.05, 0.3)
+    )
+    ```
+    This guarantees that $\Omega_m$ strictly remains between the baryonic floor ($0.05$) and the observed matter upper bound ($\sim 0.3$).
+*   **Dynamic Density Computation:** The actual physical density $\kappa\rho_0$ is derived dynamically inside the loss function at each step using the current expansion rate:
+    $$\kappa\rho_0 = \Omega_m \cdot 3 \cdot H_{mean}(1.0)^2$$
+    This ensures the physical matter density is always perfectly coupled to the network's current learned expansion history, satisfying the Friedmann equation by definition at $t=0$.
 
 ### 5.5 EFE Coordinate Sampling & Active Redshift Region Prioritization
 To prevent the metric network from exploiting unobserved gaps in the coordinate space to build unphysical coordinate singularities (e.g. "gravitational redshift pumps" designed to fake expansion history), we implement a hierarchical sampling scheme for the training domain.
