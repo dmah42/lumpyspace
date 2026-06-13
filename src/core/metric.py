@@ -16,6 +16,9 @@ class MetricNN(eqx.Module):
   Output: 10 scalars (upper triangle of g_mu_nu)
   """
 
+  OMEGA_0 = 10.0
+  EPSILON = 1e-4
+
   mlp: eqx.nn.MLP
   spatial_weight_net: eqx.nn.MLP
   omega_m_raw: jnp.ndarray
@@ -28,7 +31,7 @@ class MetricNN(eqx.Module):
       out_size=10,
       width_size=64,
       depth=4,
-      activation=jnp.sin,  # SiREN-like activation as per design
+      activation=jnp.sin,  # SiREN-like activation
       key=key,
     )
 
@@ -51,21 +54,45 @@ class MetricNN(eqx.Module):
       key=k_spatial,
     )
 
-    def seed_layer(layer, l_key):
+    def seed_last_layer(layer, l_key):
       if isinstance(layer, eqx.nn.Linear):
         # Initialize weights with tiny numerical noise to avoid zero-derivatives
-        noise_w = jax.random.normal(l_key, layer.weight.shape) * 1e-4
+        noise_w = jax.random.normal(l_key, layer.weight.shape) * self.EPSILON
         layer = eqx.tree_at(lambda _layer: _layer.weight, layer, noise_w)
 
         # Add tiny numerical noise to biases
-        noise = jax.random.normal(l_key, (10,)) * 1e-4
+        noise = jax.random.normal(l_key, (10,)) * self.EPSILON
         layer = eqx.tree_at(lambda _layer: _layer.bias, layer, noise)
+        return layer
+      return layer
+
+    def apply_siren_omega_0(layer, omega_0: float):
+      """
+      Applies the SIREN omega_0 frequency multiplier to spatial dimensions.
+      """
+      if isinstance(layer, eqx.nn.Linear):
+        # layer.weight is (out_features, in_features) where in_features is 4
+        # We ONLY want high frequency in space (x, y, z), not time (t).
+        # Time is column 0. Space is columns 1, 2, 3.
+        w_scaled = layer.weight.at[:, 1:].set(layer.weight[:, 1:] * omega_0)
+
+        # Scale biases to ensure the high-frequency phase shifts correctly
+        b_scaled = layer.bias * omega_0
+
+        layer = eqx.tree_at(lambda _layer: _layer.weight, layer, w_scaled)
+        layer = eqx.tree_at(lambda _layer: _layer.bias, layer, b_scaled)
         return layer
       return layer
 
     last_idx = len(self.mlp.layers) - 1
     new_layers = list(self.mlp.layers)
-    new_layers[last_idx] = seed_layer(new_layers[last_idx], k2)
+
+    # Apply SIREN high-frequency initialization to the first layer
+    new_layers[0] = apply_siren_omega_0(new_layers[0], omega_0=self.OMEGA_0)
+
+    # Apply near-zero initialization to final layer to start near-Minkowski
+    new_layers[last_idx] = seed_last_layer(new_layers[last_idx], k2)
+
     self.mlp = eqx.tree_at(lambda m: m.layers, self.mlp, tuple(new_layers))
 
   def get_spatial_weight(self, coords: jnp.ndarray) -> jnp.ndarray:

@@ -3,18 +3,36 @@ import os
 
 import pytest
 
-from src.training.checkpoint import TrainingState, load_meta, save_meta
+from src.training.checkpoint import (
+  ConstraintState,
+  TrainingState,
+  load_meta,
+  save_meta,
+)
+from src.training.loss import (
+  METRIC_EXPAND,
+  METRIC_SHEAR,
+  METRIC_SPATIAL,
+  METRIC_WEC,
+)
 
 
 def test_save_and_load_meta(tmp_path):
   meta_path = str(tmp_path / "model.eqx.meta")
+  constraint_state: ConstraintState = {
+    "lambda_val": 0.1,
+    "w_penalty": 2.0,
+    "ema_violation": 0.05,
+    "last_check_violation": 0.06,
+  }
+
   state: TrainingState = {
     "step": 100,
     "best_loss": 0.001,
-    "lambda_wec": 500.0,
-    "w_penalty": 1000.0,
-    "ema_violation": 0.5,
-    "last_check_violation": 1.0,
+    METRIC_WEC: constraint_state,
+    METRIC_EXPAND: constraint_state,
+    METRIC_SHEAR: constraint_state,
+    METRIC_SPATIAL: constraint_state,
   }
 
   save_meta(meta_path, state)

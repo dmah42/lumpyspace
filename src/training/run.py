@@ -13,8 +13,8 @@ from src.training.trainer import train_model
 
 
 def run_training(
-  max_steps: int = 20000,
-  learning_rate: float = 1e-5,
+  max_steps: int = 100000,
+  learning_rate: float = 1e-4,
   checkpoint_path: str = "checkpoints/pinn_metric.eqx",
   log_path: str = "logs/training_metrics.csv",
   w_efe: float = 1.0,
@@ -65,8 +65,8 @@ def run_training(
     learning_rate=learning_rate,
     log_path=log_path,
     kick_period=200,
-    patience=2000,
-    peak_learning_rate=1e-4,
+    patience=10000,
+    peak_learning_rate=3e-4,
     checkpoint_path=checkpoint_path,
     key=train_key,
     w_efe=w_efe,

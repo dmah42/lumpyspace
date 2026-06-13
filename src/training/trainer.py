@@ -12,15 +12,27 @@ import jax.numpy as jnp
 import optax
 
 from src.training.checkpoint import TrainingState, load_meta, save_meta
+from src.training.constraints import ConstraintManager
 from src.training.loss import (
+  CONSTRAINT_METRICS,
+  METRIC_BAO,
+  METRIC_EXPAND,
+  METRIC_LOSS,
+  METRIC_MEAN_W_SPATIAL,
+  METRIC_OMEGA_M,
+  METRIC_PHYS,
+  METRIC_SHEAR,
+  METRIC_SN,
+  METRIC_SPATIAL,
+  METRIC_WEC,
   apply_spatial_weight,
   get_bao_loss,
+  get_cmb_loss,
   get_data_loss,
   get_efe_loss,
 )
-from src.training.scheduler import AdaptivePenaltyState
 
-START_W_WEC = 1.0
+START_W_PENALTY = 1.0
 
 
 @contextmanager
@@ -37,12 +49,15 @@ def _get_log_writer(log_path: str | None, resume: bool = False):
         log_file,
         fieldnames=[
           "step",
-          "loss",
-          "l_phys",
-          "l_wec",
-          "l_sn",
-          "l_bao",
-          "omega_m",
+          METRIC_LOSS,
+          METRIC_PHYS,
+          METRIC_WEC,
+          METRIC_EXPAND,
+          METRIC_SHEAR,
+          METRIC_SPATIAL,
+          METRIC_SN,
+          METRIC_BAO,
+          METRIC_OMEGA_M,
         ],
       )
       if not (resume and file_exists):
@@ -55,8 +70,7 @@ def save_checkpoint(
   model: eqx.Module,
   step: int,
   best_loss: float,
-  lambda_wec: float,
-  wec_scheduler: AdaptivePenaltyState,
+  constraints: dict[str, ConstraintManager],
 ) -> None:
   """Helper to serialize model leaves and meta state atomically."""
   os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -64,10 +78,10 @@ def save_checkpoint(
   state: TrainingState = {
     "step": step,
     "best_loss": best_loss,
-    "lambda_wec": lambda_wec,
-    "w_penalty": wec_scheduler.w_penalty,
-    "ema_violation": wec_scheduler.ema_violation,
-    "last_check_violation": wec_scheduler.last_check_violation,
+    METRIC_WEC: constraints[METRIC_WEC].to_dict(),
+    METRIC_EXPAND: constraints[METRIC_EXPAND].to_dict(),
+    METRIC_SHEAR: constraints[METRIC_SHEAR].to_dict(),
+    METRIC_SPATIAL: constraints[METRIC_SPATIAL].to_dict(),
   }
   save_meta(path + ".meta", state)
 
@@ -142,12 +156,14 @@ def train_model(
     bao_dm: jnp.ndarray,
     bao_dh: jnp.ndarray,
     bao_cov: jnp.ndarray,
-    lambda_wec: jnp.ndarray,
-    w_wec: jnp.ndarray,
+    lambdas: dict[str, jnp.ndarray],
+    w_penalties: dict[str, jnp.ndarray],
   ) -> tuple[eqx.Module, optax.OptState, jnp.ndarray, dict[str, jnp.ndarray]]:
-    # We sample coordinates across the physical domain [-4.0, 1.0]
-    # to ensure the metric is constrained well beyond the supernova data.
-    k1, k2, k3 = jax.random.split(key, 3)
+    # We sample coordinates across the physical domain [-4.0, 1.0] in four
+    # spans: Supernova data ([-2.5, 1.0]), inactive range ([-3.99, -2.5]),
+    # spatial coordinates for the spatial weights ([-1.0, 1.0]), and the CMB
+    # constraints ([-4.0, -3.99]).
+    k1, k2, k3, k4 = jax.random.split(key, 4)
 
     # Span = 3.5. 800 points -> ~228 points per unit redshift
     t_active = jax.random.uniform(k1, (800, 1), minval=-2.5, maxval=1.0)
@@ -158,6 +174,15 @@ def train_model(
     t_coords = jnp.concatenate([t_active, t_inactive], axis=0)
     spatial_coords = jax.random.uniform(k3, (1000, 3), minval=-1.0, maxval=1.0)
     coords = jnp.concatenate([t_coords, spatial_coords], axis=1)
+
+    # Sample narrow CMB boundary slice for deep past priors
+    t_cmb = jax.random.uniform(k4, (50, 1), minval=-4.0, maxval=-3.99)
+    spatial_cmb = jax.random.uniform(k4, (50, 3), minval=-1.0, maxval=1.0)
+    coords_cmb = jnp.concatenate([t_cmb, spatial_cmb], axis=1)
+
+    def get_al_penalty(loss_val, lam, w):
+      """Computes the Augmented Lagrangian penalty."""
+      return lam * loss_val + 0.5 * w * (loss_val**2)
 
     def loss_fn(model):
       # Compute matter density and Omega_m today in a single pass to avoid
@@ -171,8 +196,8 @@ def train_model(
       l_phys_raw_vals, l_wec_raw_vals, w_4d_vals = v_efe_loss(coords)
 
       # Compute point-wise Augmented Lagrangian penalty for WEC
-      al_penalty_raw_vals = lambda_wec * l_wec_raw_vals + 0.5 * w_wec * (
-        l_wec_raw_vals**2
+      al_penalty_raw_vals = get_al_penalty(
+        l_wec_raw_vals, lambdas["l_wec"], w_penalties["l_wec"]
       )
 
       # Total raw physics error per point
@@ -181,6 +206,22 @@ def train_model(
       # Apply the 4D Spatial Curriculum point-wise
       weighted_phys_vals = apply_spatial_weight(total_phys_raw_vals, w_4d_vals)
       total_weighted_phys = jnp.mean(weighted_phys_vals)
+
+      # 1.5 CMB Boundary Penalties (Deep Past)
+      v_cmb_loss = jax.vmap(lambda c: get_cmb_loss(model, c))
+      l_expand_raw, l_shear_raw, l_spatial_raw = v_cmb_loss(coords_cmb)
+
+      l_expand = jnp.mean(l_expand_raw)
+      l_shear = jnp.mean(l_shear_raw)
+      l_spatial_cmb = jnp.mean(l_spatial_raw)
+
+      cmb_penalty = (
+        get_al_penalty(l_expand, lambdas["l_expand"], w_penalties["l_expand"])
+        + get_al_penalty(l_shear, lambdas["l_shear"], w_penalties["l_shear"])
+        + get_al_penalty(
+          l_spatial_cmb, lambdas["l_spatial"], w_penalties["l_spatial"]
+        )
+      )
 
       # Means for logging and lambda update
       l_phys = jnp.mean(l_phys_raw_vals)
@@ -199,16 +240,21 @@ def train_model(
       )
 
       # Total Loss seamlessly integrates the spatially weighted physical errors
-      # (EFE + AL WEC) with the global data losses.
-      total_loss = total_weighted_phys + w_sn * l_sn + w_bao * l_bao
+      # (EFE + AL WEC) with the global data losses and CMB constraints.
+      total_loss = (
+        total_weighted_phys + cmb_penalty + w_sn * l_sn + w_bao * l_bao
+      )
       return total_loss, {
-        "loss": total_loss,
-        "l_phys": l_phys,
-        "l_wec": l_wec,
-        "l_sn": l_sn,
-        "l_bao": l_bao,
-        "omega_m": omega_m_today[0],
-        "mean_w_spatial": mean_w_spatial,
+        METRIC_LOSS: total_loss,
+        METRIC_PHYS: l_phys,
+        METRIC_WEC: l_wec,
+        METRIC_EXPAND: l_expand,
+        METRIC_SHEAR: l_shear,
+        METRIC_SPATIAL: l_spatial_cmb,
+        METRIC_SN: l_sn,
+        METRIC_BAO: l_bao,
+        METRIC_OMEGA_M: omega_m_today[0],
+        METRIC_MEAN_W_SPATIAL: mean_w_spatial,
       }
 
     (loss, metrics), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(
@@ -228,13 +274,15 @@ def train_model(
 
   # Training State for early stopping
   best_loss = float("inf")
+  start_step = 0
   patience_counter = 0
 
-  start_step = 0
-  start_lambda_wec = 0.0
-  start_w_wec = START_W_WEC
-  start_ema = 1.0
-  start_last_check = float("inf")
+  constraints = {
+    METRIC_WEC: ConstraintManager(),
+    METRIC_EXPAND: ConstraintManager(),
+    METRIC_SHEAR: ConstraintManager(),
+    METRIC_SPATIAL: ConstraintManager(),
+  }
 
   if resume and checkpoint_path:
     latest_path = checkpoint_path.replace(".eqx", "_latest.eqx")
@@ -243,31 +291,24 @@ def train_model(
 
     start_step = state["step"]
     best_loss = state["best_loss"]
-    start_lambda_wec = state["lambda_wec"]
-    start_w_wec = state["w_penalty"]
-    start_ema = state["ema_violation"]
-    start_last_check = state["last_check_violation"]
 
-  if log_path:
-    if resume and start_step > 0:
-      print(f"Resuming log at step {start_step}. Appending to {log_path}...")
-    else:
-      print(f"Starting training. Logging to {log_path}...")
-  else:
-    print("Starting training (logging disabled)...")
-
-  # Initialize Augmented Lagrangian multipliers and scaling parameter
-  lambda_wec_val = jnp.array(start_lambda_wec)
-  w_wec_val = jnp.array(start_w_wec)
-  wec_scheduler = AdaptivePenaltyState(
-    w_penalty=start_w_wec,
-    ema_violation=start_ema,
-    last_check_violation=start_last_check,
-  )
+    constraints[METRIC_WEC] = ConstraintManager.from_dict(state["l_wec"])
+    constraints[METRIC_EXPAND] = ConstraintManager.from_dict(state["l_expand"])
+    constraints[METRIC_SHEAR] = ConstraintManager.from_dict(state["l_shear"])
+    constraints[METRIC_SPATIAL] = ConstraintManager.from_dict(
+      state["l_spatial"]
+    )
 
   with _get_log_writer(log_path, resume=resume) as writer_context:
     for i in range(max_steps):
       key, subkey = jax.random.split(key)
+
+      lambdas = {}
+      w_penalties = {}
+      for k, m in constraints.items():
+        lam, w = m.get_arrays()
+        lambdas[k] = jnp.array(lam)
+        w_penalties[k] = jnp.array(w)
 
       model, opt_state, _, metrics = step(
         model,
@@ -280,33 +321,21 @@ def train_model(
         bao_dm,
         bao_dh,
         bao_cov,
-        lambda_wec_val,
-        w_wec_val,
+        lambdas,
+        w_penalties,
       )
 
-      current_loss = float(metrics["loss"])
+      current_loss = float(metrics[METRIC_LOSS])
       current_step = start_step + i
 
-      # Update EMA for constraint violation and check for penalty bump
-      l_wec_val_scalar = float(metrics["l_wec"])
-      bumped = wec_scheduler.update(
-        l_wec_val_scalar,
-        i,
-        check_interval=adaptive_check_interval,
-      )
-
-      if bumped:
-        print(
-          f"Adaptive Penalty: w_wec bumped to {wec_scheduler.w_penalty:.1f} "
-          f"(EMA l_wec: {wec_scheduler.ema_violation:.6e})"
-        )
-
-      w_wec_val = jnp.array(wec_scheduler.w_penalty)
-
-      # Update Augmented Lagrangian multiplier:
-      # lambda <- lambda + mu * violation
-      l_wec_val = metrics["l_wec"]
-      lambda_wec_val = lambda_wec_val + w_wec_val * l_wec_val
+      # Update Constraints
+      for k in CONSTRAINT_METRICS:
+        manager = constraints[k]
+        val = float(metrics[k])
+        bumped = manager.update(val, i, adaptive_check_interval)
+        if bumped:
+          w_val = manager.scheduler.w_penalty
+          print(f"Adaptive Penalty: {k} bumped to {w_val:.1f}")
 
       # Logging & Telemetry
       if writer_context and i % 10 == 0:
@@ -314,12 +343,15 @@ def train_model(
         log_writer.writerow(
           {
             "step": current_step,
-            "loss": f"{current_loss:.6e}",
-            "l_phys": f"{float(metrics['l_phys']):.6e}",
-            "l_wec": f"{float(metrics['l_wec']):.6e}",
-            "l_sn": f"{float(metrics['l_sn']):.6e}",
-            "l_bao": f"{float(metrics['l_bao']):.6e}",
-            "omega_m": f"{float(metrics['omega_m']):.6e}",
+            METRIC_LOSS: f"{current_loss:.6e}",
+            METRIC_PHYS: f"{float(metrics[METRIC_PHYS]):.6e}",
+            METRIC_WEC: f"{float(metrics[METRIC_WEC]):.6e}",
+            METRIC_EXPAND: f"{float(metrics[METRIC_EXPAND]):.6e}",
+            METRIC_SHEAR: f"{float(metrics[METRIC_SHEAR]):.6e}",
+            METRIC_SPATIAL: f"{float(metrics[METRIC_SPATIAL]):.6e}",
+            METRIC_SN: f"{float(metrics[METRIC_SN]):.6e}",
+            METRIC_BAO: f"{float(metrics[METRIC_BAO]):.6e}",
+            METRIC_OMEGA_M: f"{float(metrics[METRIC_OMEGA_M]):.6e}",
           }
         )
         log_file.flush()
@@ -327,9 +359,9 @@ def train_model(
       if i % 100 == 0:
         print(
           f"step {current_step}, loss: {current_loss:.6e} | "
-          f"l_efe: {float(metrics['l_phys']):.3e} | "
-          f"l_sn: {float(metrics['l_sn']):.3e} | "
-          f"l_wec: {float(metrics['l_wec']):.3e}"
+          f"{METRIC_PHYS}: {float(metrics[METRIC_PHYS]):.3e} | "
+          f"{METRIC_SN}: {float(metrics[METRIC_SN]):.3e} | "
+          f"{METRIC_WEC}: {float(metrics[METRIC_WEC]):.3e}"
         )
 
         # Continually save the latest state so resumption never loses progress
@@ -340,8 +372,7 @@ def train_model(
             model,
             current_step,
             best_loss,
-            float(lambda_wec_val),
-            wec_scheduler,
+            constraints,
           )
 
       # Early Stopping & Safety Checks
@@ -369,8 +400,7 @@ def train_model(
             model,
             current_step,
             best_loss,
-            float(lambda_wec_val),
-            wec_scheduler,
+            constraints,
           )
 
           # Also update the latest checkpoint, because this is now the most
@@ -381,8 +411,7 @@ def train_model(
             model,
             current_step,
             best_loss,
-            float(lambda_wec_val),
-            wec_scheduler,
+            constraints,
           )
       else:
         patience_counter += 1

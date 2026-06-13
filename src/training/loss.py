@@ -11,6 +11,19 @@ from src.core.metric import MetricNN
 from src.core.tensors import get_ricci_tensor
 from src.physics.geodesics import get_bao_distances, get_luminosity_distance
 
+METRIC_LOSS = "loss"
+METRIC_PHYS = "l_phys"
+METRIC_WEC = "l_wec"
+METRIC_EXPAND = "l_expand"
+METRIC_SHEAR = "l_shear"
+METRIC_SPATIAL = "l_spatial"
+METRIC_SN = "l_sn"
+METRIC_BAO = "l_bao"
+METRIC_OMEGA_M = "omega_m"
+METRIC_MEAN_W_SPATIAL = "mean_w_spatial"
+
+CONSTRAINT_METRICS = (METRIC_WEC, METRIC_EXPAND, METRIC_SHEAR, METRIC_SPATIAL)
+
 PLANCK_RD_MPC = 147.09
 
 
@@ -146,3 +159,56 @@ def get_bao_loss(
   chi2_vals = v_compute_chi2(dm_ratio, dh_ratio, dm_obs, dh_obs, cov_invs)
 
   return jnp.mean(chi2_vals)
+
+
+def get_cmb_loss(
+  model: MetricNN,
+  coords: jnp.ndarray,
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+  """
+  Computes the three CMB constraints at the deep past boundary.
+
+  Expansion, Shear (Isotropy), and Spatial Homogeneity.
+  Returns raw loss values before Augmented Lagrangian weighting.
+  """
+  # Extract metric and spatial metric
+  g = model(coords)
+  g_spatial = g[1:4, 1:4]
+  g_spatial_inv = jnp.linalg.inv(g_spatial)
+
+  # Lapse function N = sqrt(-g_00)
+  lapse = jnp.sqrt(-g[0, 0])
+
+  # Compute Jacobian to get time and spatial derivatives
+  # shape of jac_g: (4, 4, 4) -> (mu, nu, k) where k is the derivative index
+  jac_g = jax.jacfwd(model)(coords)
+
+  # Time derivative of spatial metric (dot_g_ij)
+  # index 0 is time 't'
+  dot_g_spatial = jac_g[1:4, 1:4, 0]
+
+  # Extrinsic curvature K_ij = -1/(2N) * dot_g_ij
+  k_ij = -1.0 / (2.0 * lapse) * dot_g_spatial
+
+  # 1. Expansion Penalty: Enforce expansion (no contraction) on all three axes
+  # H_i = -K^i_i (diagonal of K_mixed)
+  k_mixed = jnp.matmul(g_spatial_inv, k_ij)
+  h_dir = -jnp.diag(k_mixed)
+  l_expand = jnp.sum(jnp.maximum(0.0, -h_dir) ** 2)
+
+  # 2. Shear Penalty: max(0, sigma^2 - 1e-5)^2
+  # sigma_ij = K_ij - 1/3 * Tr(K) * g_ij
+  sigma_ij = k_ij - 1.0 / 3.0 * jnp.trace(k_mixed) * g_spatial
+  # sigma^2 = 1/2 * sigma_ij * g^{ia} g^{jb} sigma_ab
+  # which is 1/2 * Tr( (g_spatial_inv @ sigma_ij)^2 )
+  sigma_mixed = jnp.matmul(g_spatial_inv, sigma_ij)
+  sigma_sq = 0.5 * jnp.trace(jnp.matmul(sigma_mixed, sigma_mixed))
+  l_shear = jnp.maximum(0.0, sigma_sq - 1e-5) ** 2
+
+  # 3. Spatial Homogeneity Penalty
+  # sum over spatial derivatives (k=1,2,3) and all metric components
+  spatial_grads = jac_g[:, :, 1:4]
+  sum_spatial_grads_sq = jnp.sum(jnp.square(spatial_grads))
+  l_spatial = jnp.maximum(0.0, sum_spatial_grads_sq - 1e-5) ** 2
+
+  return l_expand, l_shear, l_spatial

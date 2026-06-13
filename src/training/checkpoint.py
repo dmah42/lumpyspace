@@ -2,16 +2,32 @@ import json
 import os
 from typing import TypedDict
 
+from src.training.loss import (
+  METRIC_EXPAND,
+  METRIC_SHEAR,
+  METRIC_SPATIAL,
+  METRIC_WEC,
+)
+
+
+class ConstraintState(TypedDict):
+  """State for a single constraint's Augmented Lagrangian penalty."""
+
+  lambda_val: float
+  w_penalty: float
+  ema_violation: float
+  last_check_violation: float
+
 
 class TrainingState(TypedDict):
   """Strictly typed dictionary for resuming training state."""
 
   step: int
   best_loss: float
-  lambda_wec: float
-  w_penalty: float
-  ema_violation: float
-  last_check_violation: float
+  l_wec: ConstraintState
+  l_expand: ConstraintState
+  l_shear: ConstraintState
+  l_spatial: ConstraintState
 
 
 def save_meta(meta_path: str, state: TrainingState) -> None:
@@ -43,10 +59,10 @@ def load_meta(meta_path: str) -> TrainingState:
   required_keys = {
     "step",
     "best_loss",
-    "lambda_wec",
-    "w_penalty",
-    "ema_violation",
-    "last_check_violation",
+    METRIC_WEC,
+    METRIC_EXPAND,
+    METRIC_SHEAR,
+    METRIC_SPATIAL,
   }
 
   missing_keys = required_keys - set(data.keys())
@@ -55,11 +71,28 @@ def load_meta(meta_path: str) -> TrainingState:
       f"Invalid .meta file. Missing required keys: {missing_keys}"
     )
 
+  def parse_constraint(c_data: dict) -> ConstraintState:
+    req_c_keys = {
+      "lambda_val",
+      "w_penalty",
+      "ema_violation",
+      "last_check_violation",
+    }
+    missing_c_keys = req_c_keys - set(c_data.keys())
+    if missing_c_keys:
+      raise ValueError(f"Missing constraint keys: {missing_c_keys}")
+    return {
+      "lambda_val": float(c_data["lambda_val"]),
+      "w_penalty": float(c_data["w_penalty"]),
+      "ema_violation": float(c_data["ema_violation"]),
+      "last_check_violation": float(c_data["last_check_violation"]),
+    }
+
   return {
     "step": int(data["step"]),
     "best_loss": float(data["best_loss"]),
-    "lambda_wec": float(data["lambda_wec"]),
-    "w_penalty": float(data["w_penalty"]),
-    "ema_violation": float(data["ema_violation"]),
-    "last_check_violation": float(data["last_check_violation"]),
+    METRIC_WEC: parse_constraint(data[METRIC_WEC]),
+    METRIC_EXPAND: parse_constraint(data[METRIC_EXPAND]),
+    METRIC_SHEAR: parse_constraint(data[METRIC_SHEAR]),
+    METRIC_SPATIAL: parse_constraint(data[METRIC_SPATIAL]),
   }

@@ -6,7 +6,7 @@ import dataclasses
 
 TAU = 0.9
 GAMMA = 10.0
-MAX_W = 1e5
+MAX_W = 1e6
 
 
 @dataclasses.dataclass
