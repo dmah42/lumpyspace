@@ -68,13 +68,15 @@ def _get_log_writer(log_path: str | None, resume: bool = False):
 def save_checkpoint(
   path: str,
   model: eqx.Module,
+  opt_state: optax.OptState,
   step: int,
   best_loss: float,
   constraints: dict[str, ConstraintManager],
 ) -> None:
-  """Helper to serialize model leaves and meta state atomically."""
+  """Helper to serialize model leaves, opt_state, and meta state atomically."""
   os.makedirs(os.path.dirname(path), exist_ok=True)
   eqx.tree_serialise_leaves(path, model)
+  eqx.tree_serialise_leaves(path + ".opt", opt_state)
   state: TrainingState = {
     "step": step,
     "best_loss": best_loss,
@@ -104,7 +106,7 @@ def train_model(
   w_efe: float = 1.0,
   w_sn: float = 10.0,
   w_bao: float = 0.5,
-  adaptive_check_interval: int = 500,
+  adaptive_check_interval: int = 1000,
   resume: bool = False,
 ) -> eqx.Module:
   """
@@ -287,6 +289,7 @@ def train_model(
   if resume and checkpoint_path:
     latest_path = checkpoint_path.replace(".eqx", "_latest.eqx")
     meta_path = latest_path + ".meta"
+    opt_path = latest_path + ".opt"
     state = load_meta(meta_path)
 
     start_step = state["step"]
@@ -298,6 +301,9 @@ def train_model(
     constraints[METRIC_SPATIAL] = ConstraintManager.from_dict(
       state["l_spatial"]
     )
+
+    if os.path.exists(opt_path):
+      opt_state = eqx.tree_deserialise_leaves(opt_path, opt_state)
 
   with _get_log_writer(log_path, resume=resume) as writer_context:
     for i in range(max_steps):
@@ -332,7 +338,7 @@ def train_model(
       for k in CONSTRAINT_METRICS:
         manager = constraints[k]
         val = float(metrics[k])
-        bumped = manager.update(val, i, adaptive_check_interval)
+        bumped = manager.update(val, current_step, adaptive_check_interval)
         if bumped:
           w_val = manager.scheduler.w_penalty
           print(f"Adaptive Penalty: {k} bumped to {w_val:.1f}")
@@ -370,6 +376,7 @@ def train_model(
           save_checkpoint(
             latest_path,
             model,
+            opt_state,
             current_step,
             best_loss,
             constraints,
@@ -398,6 +405,7 @@ def train_model(
           save_checkpoint(
             checkpoint_path,
             model,
+            opt_state,
             current_step,
             best_loss,
             constraints,
@@ -409,6 +417,7 @@ def train_model(
           save_checkpoint(
             latest_path,
             model,
+            opt_state,
             current_step,
             best_loss,
             constraints,
