@@ -23,7 +23,8 @@ class ConstraintManager:
     Returns True if the penalty weight was bumped.
     """
     bumped = self.scheduler.update(current_violation, step, check_interval)
-    self.lambda_val += self.scheduler.w_penalty * current_violation
+    if step > 0 and step % check_interval == 0:
+      self.lambda_val += self.scheduler.w_penalty * current_violation
     return bumped
 
   def get_arrays(self) -> tuple[float, float]:
