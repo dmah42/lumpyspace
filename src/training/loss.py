@@ -191,18 +191,21 @@ def get_cmb_loss(
   k_ij = -1.0 / (2.0 * lapse) * dot_g_spatial
 
   # 1. Expansion Penalty: Enforce expansion (no contraction) on all three axes
-  # H_i = -K^i_i (diagonal of K_mixed)
-  k_mixed = jnp.matmul(g_spatial_inv, k_ij)
-  h_dir = -jnp.diag(k_mixed)
+  # H_i = -K^i_i (diagonal of K_mixed).
+  # Computed efficiently to avoid full matmul.
+  h_dir = -jnp.sum(g_spatial_inv * jnp.transpose(k_ij), axis=-1)
   l_expand = jnp.sum(jnp.maximum(0.0, -h_dir) ** 2)
 
   # 2. Shear Penalty: max(0, sigma^2 - 1e-5)^2
   # sigma_ij = K_ij - 1/3 * Tr(K) * g_ij
-  sigma_ij = k_ij - 1.0 / 3.0 * jnp.trace(k_mixed) * g_spatial
+  # Tr(K) is exactly -sum(h_dir)
+  sigma_ij = k_ij + 1.0 / 3.0 * jnp.sum(h_dir) * g_spatial
+
   # sigma^2 = 1/2 * sigma_ij * g^{ia} g^{jb} sigma_ab
   # which is 1/2 * Tr( (g_spatial_inv @ sigma_ij)^2 )
   sigma_mixed = jnp.matmul(g_spatial_inv, sigma_ij)
-  sigma_sq = 0.5 * jnp.trace(jnp.matmul(sigma_mixed, sigma_mixed))
+  # Optimize Tr(A @ A) -> sum(A * A.T) to save a matmul
+  sigma_sq = 0.5 * jnp.sum(sigma_mixed * jnp.transpose(sigma_mixed))
   l_shear = jnp.maximum(0.0, sigma_sq - 1e-5) ** 2
 
   # 3. Spatial Homogeneity Penalty
