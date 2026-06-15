@@ -17,8 +17,8 @@ def run_training(
   learning_rate: float = 1e-4,
   checkpoint_path: str = "checkpoints/pinn_metric.eqx",
   log_path: str = "logs/training_metrics.csv",
-  w_efe: float = 1.0,
-  w_sn: float = 5.0,
+  w_efe: float = 2.0,
+  w_sn: float = 10.0,
   w_bao: float = 5.0,
 ) -> None:
   """
