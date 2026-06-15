@@ -4,8 +4,16 @@ Schedulers for dynamically updating hyperparameter penalties during training.
 
 import dataclasses
 
-TAU = 0.9
-GAMMA = 10.0
+# The fraction of the previous violation that the current violation must drop
+# below to avoid a penalty bump. E.g., 0.95 means the violation must improve by
+# at least 5% every check interval.
+TAU = 0.95
+
+# The multiplicative factor applied to the penalty weight when the violation
+# stalls.
+GAMMA = 5.0
+
+# MAX_W: The absolute maximum value the penalty weight is allowed to reach.
 MAX_W = 1e6
 
 
