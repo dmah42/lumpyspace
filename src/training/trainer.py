@@ -31,6 +31,7 @@ from src.training.loss import (
   get_data_loss,
   get_efe_loss,
 )
+from src.training.scheduler import create_geometric_sgdr_schedule
 
 START_W_PENALTY = 1.0
 
@@ -98,7 +99,8 @@ def train_model(
   learning_rate: float = 1e-4,
   target_loss: float = 1e-6,
   patience: int = 500,
-  kick_period: int = 200,
+  kick_period_0: int = 500,
+  kick_period_mult: float = 1.5,
   peak_learning_rate: float = 1e-3,
   log_path: str | None = "logs/training_metrics.csv",
   checkpoint_path: str | None = None,
@@ -114,17 +116,12 @@ def train_model(
   Minimizes combined EFE and Data residuals with early stopping and telemetry.
   """
 
-  # Periodic learning rate schedule to continuously kick the model out
-  # of local minima. Decays rapidly, then stays flat at baseline.
-  def lr_schedule(step):
-    cycle_length = kick_period
-    decay_length = cycle_length // 5  # Decay over the first 20% of the cycle
-
-    cycle_step = step % cycle_length
-    progress = jnp.minimum(cycle_step / decay_length, 1.0)
-    cosine_val = 0.5 * (1.0 + jnp.cos(jnp.pi * progress))
-
-    return learning_rate + (peak_learning_rate - learning_rate) * cosine_val
+  lr_schedule = create_geometric_sgdr_schedule(
+    learning_rate=learning_rate,
+    peak_learning_rate=peak_learning_rate,
+    kick_period_0=kick_period_0,
+    kick_period_mult=kick_period_mult,
+  )
 
   # Use gradient clipping to stabilize training for the MLP,
   # but allow Omega_m to learn independently to avoid being suppressed.

@@ -391,7 +391,18 @@ for shear.
     if localized curvature gradients and non-zero shear can simultaneously
     explain both the Hubble Tension and the illusion of Dark Energy.
 
-- **Task 4.7: Late-Time Isotropy Penalty (Galaxy Surveys) [FUTURE]**
+- **Task 4.7: Dynamic Kick Period (Cosine Annealing with Warm Restarts)
+  [COMPLETED]**
+  - **Goal:** Smooth out late-stage training by transitioning from rapid 
+    early-stage exploration to long, stable settling periods.
+  - **Implementation:** Modify the `lr_schedule` in `trainer.py` to use a 
+    geometric progression for the `kick_period` using $T_i = T_{i-1} \times T_{mult}$. 
+    To preserve exponential settling time without causing kick starvation over a 
+    30,000 step run, use $T_0 = 500$ and $T_{mult} = 1.5$. This yields 8 kicks 
+    over 30,000 steps while mathematically aligning with the exponentially 
+    increasing time required to navigate deep local minima.
+
+- **Task 4.8: Late-Time Isotropy Penalty (Galaxy Surveys) [FUTURE]**
   - **Goal:** Align the model's geometry with macroscopic observations of the
     local universe today ($t=0$).
   - **Implementation:** Observational data from all-sky local galaxy surveys
@@ -404,7 +415,7 @@ for shear.
     universe while mathematically allowing for small, physically viable
     anisotropic solutions.
 
-- **Task 4.8: Model Selection & Final Synthesis [PENDING]**
+- **Task 4.9: Model Selection & Final Synthesis [FUTURE]**
   - **Goal:** Statistically determine if the inhomogeneous model is superior to
     $\Lambda$CDM.
   - **Implementation:**
@@ -412,7 +423,6 @@ for shear.
       Information Criterion)** for both the PINN and a standard FLRW fit.
   - **Success Criterion:** Final determination of whether the data statistically
     justifies a "lumpy" universe over a smooth one.
-
 ---
 
 ## 5. Advanced Training Dynamics: Batching & Gradient Balancing
