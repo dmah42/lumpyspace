@@ -34,5 +34,7 @@
   - [x] Implement convergence-based early stopping and CSV telemetry
   - [x] Create `src/training/run.py` for production execution
 - [ ] Task 4.3: Deep Metric Extraction & Shear Analysis
-- [ ] Task 4.4: Out-of-Sample Validation (Cosmic Chronometers)
-- [ ] Task 4.5: Model Selection & Final Synthesis
+- [ ] Task 4.4: Directional SN data
+- [ ] Task 4.5: Out-of-Sample Validation (Cosmic Chronometers)
+- [ ] Task 4.6: Model Selection & Final Synthesis
+- [ ] Task 4.7: Inhomogeneity Seed & Frequency Ablation Studies

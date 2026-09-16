@@ -3,18 +3,23 @@ Data loaders for the PINN.
 """
 
 import jax.numpy as jnp
+import numpy as np
 import pandas as pd
+from astropy.cosmology import FlatLambdaCDM
 
 
 def load_mock_data(
-  file_path: str = "data/mock_flrw.csv",
+  num_samples: int = 100,
+  z_max: float = 2.0,
+  h0: float = 70.0,
+  om0: float = 0.3,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-  """Loads mock FLRW data for calibration."""
-  df = pd.read_csv(file_path)
-  z = jnp.array(df["z"].values)
-  mu = jnp.array(df["mu"].values)
-  # Default error to 1.0 for mock data
-  return z, mu, jnp.ones_like(z)
+  """Generates synthetic FLRW supernova data directly in memory."""
+  cosmo = FlatLambdaCDM(H0=h0, Om0=om0)
+  z = np.linspace(0.01, z_max, num_samples)
+  mu = cosmo.distmod(z).value
+  z_jnp = jnp.array(z)
+  return z_jnp, jnp.array(mu), jnp.ones_like(z_jnp)
 
 
 def load_pantheon_plus(

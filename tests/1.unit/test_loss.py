@@ -236,3 +236,85 @@ def test_efe_loss_positivity(monkeypatch):
   # constraint and telemetry logger.
   assert raw_residual_loss >= 0.0, "Raw residual loss must be non-negative!"
   assert wec_penalty_raw >= 0.0, "Raw WEC penalty must be non-negative!"
+
+
+def test_efe_loss_comoving_dust_with_shift(monkeypatch):
+  """
+  Verifies that get_efe_loss computes comoving dust Stress-Energy tensor
+  accurately without NaN or invalid shapes when the metric has off-diagonal
+  time-space components g_0i != 0.
+  """
+  import src.training.loss
+
+  def mock_ricci_tensor(metric_fn, coords):
+    return jnp.zeros((4, 4))
+
+  monkeypatch.setattr(src.training.loss, "get_ricci_tensor", mock_ricci_tensor)
+
+  class MetricWithShift:
+    def __call__(self, coords):
+      # Metric with non-zero shift components g_01 = 0.2, g_02 = -0.1
+      return jnp.array(
+        [
+          [-1.0, 0.2, -0.1, 0.0],
+          [0.2, 1.0, 0.0, 0.0],
+          [-0.1, 0.0, 1.0, 0.0],
+          [0.0, 0.0, 0.0, 1.0],
+        ]
+      )
+
+    def get_spatial_weight(self, coords):
+      return jnp.array([0.0])
+
+  metric_fn = MetricWithShift()
+  coords = jnp.array([0.0, 0.0, 0.0, 0.0])
+  kappa_rho_0 = 0.5
+
+  raw_residual_loss, wec_penalty_raw, _ = get_efe_loss(
+    metric_fn, coords, kappa_rho_0
+  )
+
+  assert not jnp.isnan(raw_residual_loss)
+  assert not jnp.isnan(wec_penalty_raw)
+  assert raw_residual_loss > 0.0
+
+
+def test_efe_loss_handles_collapsing_lapse(monkeypatch):
+  """
+  Verifies that get_efe_loss stays finite when the lapse (g_00) collapses to
+  zero, which can happen transiently during early, unconstrained training.
+  Without a floor on the -g_00 divisor, the T^0_i term would produce NaN/Inf.
+  """
+  import src.training.loss
+
+  def mock_ricci_tensor(metric_fn, coords):
+    return jnp.zeros((4, 4))
+
+  monkeypatch.setattr(src.training.loss, "get_ricci_tensor", mock_ricci_tensor)
+
+  class MetricWithCollapsedLapse:
+    def __call__(self, coords):
+      # g_00 = 0.0 with non-zero shift components; still invertible overall
+      # (det of the spatial 3x3 block is -0.05) despite the zero lapse.
+      return jnp.array(
+        [
+          [0.0, 0.2, -0.1, 0.0],
+          [0.2, 1.0, 0.0, 0.0],
+          [-0.1, 0.0, 1.0, 0.0],
+          [0.0, 0.0, 0.0, 1.0],
+        ]
+      )
+
+    def get_spatial_weight(self, coords):
+      return jnp.array([0.0])
+
+  metric_fn = MetricWithCollapsedLapse()
+  coords = jnp.array([0.0, 0.0, 0.0, 0.0])
+  kappa_rho_0 = 0.5
+
+  raw_residual_loss, wec_penalty_raw, _ = get_efe_loss(
+    metric_fn, coords, kappa_rho_0
+  )
+
+  assert jnp.isfinite(raw_residual_loss)
+  assert jnp.isfinite(wec_penalty_raw)

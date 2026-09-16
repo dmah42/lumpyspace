@@ -64,13 +64,19 @@ def get_efe_loss(
   # dynamically scaled by the derived expansion rate today.
   current_density = kappa_rho_0 / jnp.sqrt(gamma)
 
-  t_mu_nu = jnp.zeros((4, 4))
-  # In comoving coordinates, dust only has energy density (T_00 = rho * -g_00)
-  t_mu_nu = t_mu_nu.at[0, 0].set(current_density * -g[0, 0])
-
-  # Compute mixed tensors (G^m_n and T^m_n) for coordinate invariance
+  # Compute mixed Einstein tensor G^m_n for coordinate invariance
   g_mixed = jnp.matmul(g_inv, g_mu_nu)
-  t_mixed = jnp.matmul(g_inv, t_mu_nu)
+
+  # In comoving coordinates, dust 4-velocity is u^mu = (1/sqrt(-g_00), 0, 0, 0).
+  # The mixed Stress-Energy Tensor T^mu_nu = rho * u^mu * u_nu:
+  # T^0_0 = -rho
+  # T^0_i = rho * g_0i / (-g_00)
+  # T^i_0 = 0, T^i_j = 0
+  # Protect against a near-zero lapse collapsing during early training.
+  neg_g00 = jnp.maximum(-g[0, 0], 1e-12)
+  t_mixed = jnp.zeros((4, 4))
+  t_mixed = t_mixed.at[0, 0].set(-current_density)
+  t_mixed = t_mixed.at[0, 1:4].set(current_density * g[0, 1:4] / neg_g00)
 
   # Physics Residual (G^m_n - 8*pi*G * T^m_n = 0)
   residual = (g_mixed - t_mixed) * gamma

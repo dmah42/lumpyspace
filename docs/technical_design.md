@@ -423,6 +423,34 @@ for shear.
       Information Criterion)** for both the PINN and a standard FLRW fit.
   - **Success Criterion:** Final determination of whether the data statistically
     justifies a "lumpy" universe over a smooth one.
+
+- **Task 4.10: Inhomogeneity Seed & Frequency Ablation Suite [FUTURE]**
+  - **Goal:** Rigorously verify that the discovered "Lumpyspace" geometry
+    (anisotropic shear channels and localized curvature lumps) and the derived
+    matter density ($\Omega_m \approx 0.23$) are genuine physical attractors
+    demanded by the Pantheon+ data and Einstein Field Equations, rather than
+    unearned artifacts or echoes of the spatial initialization seed.
+  - **Implementation:**
+    - **Spatial Frequency Sweep ($\omega_0$):** Train an ensemble of models
+      across a broad range of first-layer SIREN coordinate scaling factors:
+      $\omega_0 \in \{3.0, 5.0, 10.0, 15.0, 20.0, 30.0\}$. Evaluate whether
+      low frequencies (box-scale variations) and high frequencies (fine-scale
+      ripples) coalesce into the same macroscopic shear channels, or if the
+      characteristic lump scale is bounded by the initialization frequency.
+    - **Stochastic RNG Seed Ensemble:** Train replicas across varied PRNG keys
+      (`seed` $\in \{42, 1337, 2024, 7, 999\}$) to ensure the orientation,
+      dipole alignment, and backreaction dynamics are invariant to specific
+      initial pseudo-random weight configurations.
+  - **Evaluation Metrics:**
+    - Stability and convergence of $\Omega_m$ across runs.
+    - Cross-correlation of the resulting 3D shear field $\sigma^2(t, x, y, z)$
+      and Ricci scalar curvature $R(t, x, y, z)$.
+    - Supernova $\chi^2$ and distance modulus residual distributions.
+    - Early-universe CMB boundary constraint adherence ($l_{\text{expand}}$,
+      $l_{\text{shear}}$, $l_{\text{spatial}}$).
+  - **Success Criterion:** The macroscopic geometry, expansion history, and
+    Pantheon+ fit remain consistent across seeds, demonstrating that the
+    lumpiness is an emergent physical necessity of inhomogeneous cosmology.
 ---
 
 ## 5. Advanced Training Dynamics: Batching & Gradient Balancing

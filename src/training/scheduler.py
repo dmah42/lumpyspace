@@ -3,6 +3,7 @@ Schedulers for dynamically updating hyperparameter penalties during training.
 """
 
 import dataclasses
+import enum
 from collections.abc import Callable
 
 import jax.numpy as jnp
@@ -16,8 +17,27 @@ TAU = 0.95
 # stalls.
 GAMMA = 5.0
 
+# The decay factor applied to the penalty weight when the constraint is
+# well-satisfied.
+GAMMA_DOWN = 2.0
+
+# The constraint violation must drop below this fraction of the last check
+# violation to trigger penalty relaxation.
+DECAY_TAU = 0.5
+
+# MIN_W: The absolute minimum value the penalty weight is allowed to reach.
+MIN_W = 1.0
+
 # MAX_W: The absolute maximum value the penalty weight is allowed to reach.
 MAX_W = 1e6
+
+
+class PenaltyAction(enum.Enum):
+  """Possible outcomes of an adaptive penalty check."""
+
+  STEADY = "steady"
+  BUMPED = "bumped"
+  DECAYED = "decayed"
 
 
 @dataclasses.dataclass
@@ -25,7 +45,8 @@ class AdaptivePenaltyState:
   """
   Manages state and update logic for an Augmented Lagrangian penalty weight.
   It tracks an Exponential Moving Average (EMA) of the constraint violation,
-  and scales up the penalty weight if the violation stalls.
+  scales up the penalty weight if the violation stalls, and relaxes it when
+  the constraint is well-satisfied.
   """
 
   w_penalty: float = 1.0
@@ -37,21 +58,26 @@ class AdaptivePenaltyState:
     current_violation: float,
     step: int,
     check_interval: int = 500,
-  ) -> bool:
+  ) -> PenaltyAction:
     """
     Updates the internal state with the latest violation.
-    Returns True if the penalty weight was bumped.
+    Returns PenaltyAction indicating whether the penalty weight was bumped,
+    decayed, or stayed steady.
     """
     self._update_ema(current_violation, step)
 
-    bumped = False
+    action = PenaltyAction.STEADY
     if step > 0 and step % check_interval == 0:
-      if self.ema_violation > TAU * self.last_check_violation:
-        self.w_penalty = min(self.w_penalty * GAMMA, MAX_W)
-        bumped = True
+      if self.last_check_violation < float("inf"):
+        if self.ema_violation > TAU * self.last_check_violation:
+          self.w_penalty = min(self.w_penalty * GAMMA, MAX_W)
+          action = PenaltyAction.BUMPED
+        elif self.ema_violation < DECAY_TAU * self.last_check_violation:
+          self.w_penalty = max(self.w_penalty / GAMMA_DOWN, MIN_W)
+          action = PenaltyAction.DECAYED
       self.last_check_violation = self.ema_violation
 
-    return bumped
+    return action
 
   def _update_ema(self, current_violation: float, step: int) -> None:
     """
@@ -68,12 +94,15 @@ def create_geometric_sgdr_schedule(
   peak_learning_rate: float,
   kick_period_0: int,
   kick_period_mult: float,
+  max_impulse_steps: int,
 ) -> Callable:
   """
   Creates a periodic learning rate schedule to continuously kick the model out
   of local minima. Decays rapidly, then stays flat at baseline.
 
-  Uses geometric progression for the cycle lengths: T_i = T_0 * M^i
+  Uses geometric progression for the cycle lengths: T_i = T_0 * M^i.
+  Caps the cosine decay duration at max_impulse_steps to prevent extended
+  high-temperature burns in late geometric cycles.
   """
 
   def schedule(step):
@@ -85,7 +114,9 @@ def create_geometric_sgdr_schedule(
     cycle_length = t_0 * (m**n)
     cycle_step = step - cycle_start
 
-    decay_length = cycle_length / 5.0  # Decay over the first 20% of the cycle
+    # Cap the impulse duration to prevent extended high-LR burns in late
+    # geometric cycles (Loshchilov & Hutter 2017; WSD paradigm).
+    decay_length = jnp.minimum(cycle_length / 5.0, float(max_impulse_steps))
 
     progress = jnp.minimum(cycle_step / decay_length, 1.0)
     cosine_val = 0.5 * (1.0 + jnp.cos(jnp.pi * progress))

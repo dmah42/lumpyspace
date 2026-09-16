@@ -31,7 +31,10 @@ from src.training.loss import (
   get_data_loss,
   get_efe_loss,
 )
-from src.training.scheduler import create_geometric_sgdr_schedule
+from src.training.scheduler import (
+  PenaltyAction,
+  create_geometric_sgdr_schedule,
+)
 
 START_W_PENALTY = 1.0
 
@@ -110,6 +113,7 @@ def train_model(
   w_bao: float = 0.5,
   adaptive_check_interval: int = 1000,
   resume: bool = False,
+  max_impulse_steps: int = 100,
 ) -> eqx.Module:
   """
   Executes the training loop for the PINN.
@@ -121,6 +125,7 @@ def train_model(
     peak_learning_rate=peak_learning_rate,
     kick_period_0=kick_period_0,
     kick_period_mult=kick_period_mult,
+    max_impulse_steps=max_impulse_steps,
   )
 
   # Use gradient clipping to stabilize training for the MLP,
@@ -335,10 +340,13 @@ def train_model(
       for k in CONSTRAINT_METRICS:
         manager = constraints[k]
         val = float(metrics[k])
-        bumped = manager.update(val, current_step, adaptive_check_interval)
-        if bumped:
+        action = manager.update(val, current_step, adaptive_check_interval)
+        if action == PenaltyAction.BUMPED:
           w_val = manager.scheduler.w_penalty
           print(f"Adaptive Penalty: {k} bumped to {w_val:.1f}")
+        elif action == PenaltyAction.DECAYED:
+          w_val = manager.scheduler.w_penalty
+          print(f"Adaptive Penalty: {k} decayed to {w_val:.1f}")
 
       # Logging & Telemetry
       if writer_context and i % 10 == 0:
@@ -359,14 +367,6 @@ def train_model(
         )
         log_file.flush()
 
-      if i % 100 == 0:
-        print(
-          f"step {current_step}, loss: {current_loss:.6e} | "
-          f"{METRIC_PHYS}: {float(metrics[METRIC_PHYS]):.3e} | "
-          f"{METRIC_SN}: {float(metrics[METRIC_SN]):.3e} | "
-          f"{METRIC_WEC}: {float(metrics[METRIC_WEC]):.3e}"
-        )
-
         # Continually save the latest state so resumption never loses progress
         if checkpoint_path:
           latest_path = checkpoint_path.replace(".eqx", "_latest.eqx")
@@ -378,6 +378,14 @@ def train_model(
             best_loss,
             constraints,
           )
+
+      if i % 100 == 0:
+        print(
+          f"step {current_step}, loss: {current_loss:.6e} | "
+          f"{METRIC_PHYS}: {float(metrics[METRIC_PHYS]):.3e} | "
+          f"{METRIC_SN}: {float(metrics[METRIC_SN]):.3e} | "
+          f"{METRIC_WEC}: {float(metrics[METRIC_WEC]):.3e}"
+        )
 
       # Early Stopping & Safety Checks
       if jnp.isnan(current_loss):

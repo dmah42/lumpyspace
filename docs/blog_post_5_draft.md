@@ -1,5 +1,5 @@
 ---
-title: "lumpyspace part 5
+title: "lumpyspace part 5: breaking symmetries and discovering lumpyspace"
 date: 2026-06-08
 draft: false
 tags:
@@ -57,18 +57,18 @@ acceleration.
 
 ### Adding the CMB Priors
 
-We knew this massive early shear was physically illegal: the Cosmic Microwave
+I knew this massive early shear was physically illegal: the Cosmic Microwave
 Background proves that the early universe was highly isotropic and homogeneous.
 
-To shut down this loophole, we finally deployed our Augmented Lagrangian
-boundary constraints at the deep past ($t \in [-4.0, -3.99]$):
+To shut down this loophole, I deployed Augmented Lagrangian boundary constraints
+at the deep past ($t \in [-4.0, -3.99]$):
 
 1. **Expansion Rate:** $H_i \ge 0$ (no contracting axes)
 2. **Isotropy (Near-Zero Shear):** $\sigma^2 \le 10^{-5}$
 3. **Homogeneity (Near-Zero Spatial Gradients):**
    $\sum (\partial g)^2 \le 10^{-5}$
 
-By enforcing the CMB isotropy constraint, we took away the network's engine.
+By enforcing the CMB isotropy constraint, I took away the network's engine.
 Forced to be perfectly isotropic in the early universe, the network _had_ to
 rely on Dark Matter ($\Omega_m = 0.3$) to balance the EFE. But in standard
 General Relativity, a universe filled only with matter **must decelerate**.
@@ -98,28 +98,82 @@ network suffers from a symmetry breaking problem: it cannot build a lumpy
 universe because it starts too perfectly smooth to ever find the gradients
 required to build lumps.
 
-To find a solution, we looked again to the
+To find a solution, I looked again to the
 [SIREN (Sinusoidal Representation Networks)](https://arxiv.org/abs/2006.09661)
-architecture, which we had already adopted. However, a SIREN multiplies the
-first layer's coordinates by a high-frequency scalar, $\omega_0$. By scaling the
-spatial coordinates by $\omega_0$ in the first layer, the network initializes as
-a superposition of high-frequency macroscopic ripples. This is the mathematical
+architecture, which I had already adopted. A SIREN multiplies the first layer's
+coordinates by a high-frequency scalar, $\omega_0$. By scaling the spatial
+coordinates by $\omega_0$ in the first layer, the network initializes as a
+superposition of high-frequency macroscopic ripples. This is the mathematical
 equivalent of seeding the universe with a primordial power spectrum of density
 perturbations, or quantum fluctuations.
 
-We chose a conservative frequency of $\omega_0 = 10.0$ (rather than the
+I chose a conservative frequency of $\omega_0 = 10.0$ (rather than the
 image-processing default of 30) to avoid an initial curvature explosion that
 could blow up the EFE residuals.
 
-This seeds the initial universe with the supercluster-scale gradients we need.
+This seeds the initial universe with the supercluster-scale gradients needed.
 It breaks the homogeneous saddle point, giving the EFE the fluctuations required
 to build late-time backreaction, while keeping the initial curvature well within
 the stable bounds of the optimizer.
 
+### Anchoring the Fluid
+
+While hunting down the symmetry breaking issue, I also discovered a subtle bug
+in the physics loss calculation that had been quietly lingering in the codebase.
+
+Falling back on FLRW and diagonal metric implementations, I had made a
+simplification for the pressureless matter Stress-Energy tensor. I set the
+energy density component as $T_{00} = \rho (-g_{00})$, left every off-diagonal
+entry in the $4 \times 4$ matrix as zero, and then converted it to mixed form by
+contracting with the inverse metric: $T^\mu_\nu = g^{\mu\alpha} T_{\alpha\nu}$.
+
+For perfectly diagonal metrics where $g_{0i} = 0$, that simplification is
+harmless. But when the PINN architecture explores arbitrary 4D spacetimes with
+non-zero shift components ($g_{0i} \neq 0$), that shortcut turns into a bug.
+
+Because the inverse metric $g^{\mu 0}$ contains off-diagonal elements ($g^{i0}$),
+multiplying $g^{i0}$ by our naive $T_{00}$ silently injected phantom momentum
+fluxes into the equations:
+
+$$T^i_0 = -g^{i0} g_{00} \rho \neq 0$$
+
+At the same time, it corrupted the rest-frame energy density:
+
+$$T^0_0 = -g^{00} g_{00} \rho \neq -\rho$$
+
+This is a serious issue. The entire physical premise of this project rests on
+matter being strictly **comoving** ($u^i = 0$). In our cosmological model,
+matter rides passively along with the cosmic expansion grid: galaxies do not blast
+relativistically through coordinate space. That comoving assumption is what
+justifies our geometric density dilution law ($\rho \propto 1/\sqrt{\det(g_{ij})}$)
+and guarantees that the cosmological redshifts tracked by our geodesic ray-tracer
+represent true metric expansion rather than arbitrary bulk Doppler shifts.
+
+By leaving that bug in place, I had accidentally handed the neural network a
+convenient mathematical cheat: By generating non-zero coordinate shifts ($g_{0i}$),
+the optimizer could fabricate fictitious relativistic matter currents and tamper
+with the local energy density to bypass the Einstein Field Equation residuals.
+
+To fix this, I went back to the first-principles definition of comoving dust.
+With spatial 4-velocity $u^i = 0$, the exact 4-velocity in an arbitrary metric is:
+
+$$u^\mu = \left(\frac{1}{\sqrt{-g_{00}}}, 0, 0, 0\right)$$
+
+Lowering the index via $u_\nu = g_{\nu\mu} u^\mu$ gives $u_0 = -\sqrt{-g_{00}}$
+and $u_i = g_{0i} / \sqrt{-g_{00}}$. The exact mixed Stress-Energy tensor
+$T^\mu_\nu = \rho u^\mu u_\nu$ is therefore:
+
+$$T^0_0 = -\rho, \qquad T^0_i = \rho \frac{g_{0i}}{-g_{00}}, \qquad T^i_0 = 0, \qquad T^i_j = 0$$
+
+I scrapped the naive $T_{\mu\nu}$ matrix calculation and implemented this exact
+mixed tensor directly in the EFE loss function. This strictly eliminated all
+phantom momentum fluxes ($T^i_0 = 0$), pinned $T^0_0$ firmly to $-\rho$, and
+closed the loophole completely.
+
 ### The Discovery of Lumpyspace
 
-With the symmetry broken and the strict CMB constraints locking the Big Bang
-boundary, we let the network run. And it found something absolutely wild.
+With the symmetry broken, the dust comoving, and the strict CMB constraints locking
+the Big Bang boundary, I let the network run. And it found something absolutely wild.
 
 At first glance, it looked like the network was still failing: the global mean
 expansion rate ($H_{\text{mean}}$) was crossing into negative territory. The
@@ -149,3 +203,4 @@ It proved the core thesis of this project: by relaxing standard homogeneity and
 isotropy assumptions, localized cosmic structures can produce the exact optical
 illusions required to fit the expansion data without ever needing a Cosmological
 Constant ($\Lambda$).
+

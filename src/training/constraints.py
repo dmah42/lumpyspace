@@ -1,6 +1,6 @@
 import dataclasses
 
-from src.training.scheduler import AdaptivePenaltyState
+from src.training.scheduler import AdaptivePenaltyState, PenaltyAction
 
 
 @dataclasses.dataclass
@@ -17,15 +17,15 @@ class ConstraintManager:
 
   def update(
     self, current_violation: float, step: int, check_interval: int = 500
-  ) -> bool:
+  ) -> PenaltyAction:
     """
     Updates the internal scheduler and steps the lambda multiplier.
-    Returns True if the penalty weight was bumped.
+    Returns PenaltyAction indicating the scheduler action.
     """
-    bumped = self.scheduler.update(current_violation, step, check_interval)
+    action = self.scheduler.update(current_violation, step, check_interval)
     if step > 0 and step % check_interval == 0:
       self.lambda_val += self.scheduler.w_penalty * current_violation
-    return bumped
+    return action
 
   def get_arrays(self) -> tuple[float, float]:
     """
