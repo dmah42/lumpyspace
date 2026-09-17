@@ -24,6 +24,7 @@ class TrainingState(TypedDict):
 
   step: int
   best_loss: float
+  best_feasible_sn: float
   l_wec: ConstraintState
   l_expand: ConstraintState
   l_shear: ConstraintState
@@ -59,6 +60,7 @@ def load_meta(meta_path: str) -> TrainingState:
   required_keys = {
     "step",
     "best_loss",
+    "best_feasible_sn",
     METRIC_WEC,
     METRIC_EXPAND,
     METRIC_SHEAR,
@@ -91,6 +93,7 @@ def load_meta(meta_path: str) -> TrainingState:
   return {
     "step": int(data["step"]),
     "best_loss": float(data["best_loss"]),
+    "best_feasible_sn": float(data["best_feasible_sn"]),
     METRIC_WEC: parse_constraint(data[METRIC_WEC]),
     METRIC_EXPAND: parse_constraint(data[METRIC_EXPAND]),
     METRIC_SHEAR: parse_constraint(data[METRIC_SHEAR]),

@@ -38,6 +38,11 @@ from src.training.scheduler import (
 
 START_W_PENALTY = 1.0
 
+# l_wec/l_expand/l_shear/l_spatial are max(0, violation)**2 hinge losses that
+# are exactly 0.0 when a constraint is satisfied; this tolerates only
+# floating-point noise around that.
+FEASIBILITY_EPS = 1e-9
+
 
 @contextmanager
 def _get_log_writer(log_path: str | None, resume: bool = False):
@@ -75,6 +80,7 @@ def save_checkpoint(
   opt_state: optax.OptState,
   step: int,
   best_loss: float,
+  best_feasible_sn: float,
   constraints: dict[str, ConstraintManager],
 ) -> None:
   """Helper to serialize model leaves, opt_state, and meta state atomically."""
@@ -84,6 +90,7 @@ def save_checkpoint(
   state: TrainingState = {
     "step": step,
     "best_loss": best_loss,
+    "best_feasible_sn": best_feasible_sn,
     METRIC_WEC: constraints[METRIC_WEC].to_dict(),
     METRIC_EXPAND: constraints[METRIC_EXPAND].to_dict(),
     METRIC_SHEAR: constraints[METRIC_SHEAR].to_dict(),
@@ -278,6 +285,7 @@ def train_model(
 
   # Training State for early stopping
   best_loss = float("inf")
+  best_feasible_sn = float("inf")
   start_step = 0
   patience_counter = 0
 
@@ -296,6 +304,7 @@ def train_model(
 
     start_step = state["step"]
     best_loss = state["best_loss"]
+    best_feasible_sn = state["best_feasible_sn"]
 
     constraints[METRIC_WEC] = ConstraintManager.from_dict(state["l_wec"])
     constraints[METRIC_EXPAND] = ConstraintManager.from_dict(state["l_expand"])
@@ -376,6 +385,7 @@ def train_model(
             opt_state,
             current_step,
             best_loss,
+            best_feasible_sn,
             constraints,
           )
 
@@ -402,9 +412,27 @@ def train_model(
       if current_loss < best_loss:
         best_loss = current_loss
         patience_counter = 0
+      else:
+        patience_counter += 1
+
+      # "Best" is saved separately from the patience/early-stopping signal
+      # above: total_loss is ~96% w_sn*l_sn, so tracking it alone would call
+      # a great-SN/physics-violating solution "best" (e.g. the pre-CMB-prior
+      # illegal-shear cheat from the last post). l_wec/l_expand/l_shear/
+      # l_spatial are hinge losses that are exactly 0.0 when compliant, so
+      # gate on those and rank only by l_sn among steps that pass.
+      is_feasible = (
+        float(metrics[METRIC_WEC]) <= FEASIBILITY_EPS
+        and float(metrics[METRIC_EXPAND]) <= FEASIBILITY_EPS
+        and float(metrics[METRIC_SHEAR]) <= FEASIBILITY_EPS
+        and float(metrics[METRIC_SPATIAL]) <= FEASIBILITY_EPS
+      )
+      current_sn = float(metrics[METRIC_SN])
+      if is_feasible and current_sn < best_feasible_sn:
+        best_feasible_sn = current_sn
         if checkpoint_path:
           print(
-            f"Saving best model with loss {current_loss:.6e} at step "
+            f"Saving best FEASIBLE model (SN chi2={current_sn:.6e}) at step "
             f"{current_step}..."
           )
           save_checkpoint(
@@ -413,22 +441,9 @@ def train_model(
             opt_state,
             current_step,
             best_loss,
+            best_feasible_sn,
             constraints,
           )
-
-          # Also update the latest checkpoint, because this is now the most
-          # recent state we have safely serialized to disk!
-          latest_path = checkpoint_path.replace(".eqx", "_latest.eqx")
-          save_checkpoint(
-            latest_path,
-            model,
-            opt_state,
-            current_step,
-            best_loss,
-            constraints,
-          )
-      else:
-        patience_counter += 1
 
       if patience_counter >= patience:
         print(

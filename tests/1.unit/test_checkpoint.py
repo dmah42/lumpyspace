@@ -29,6 +29,7 @@ def test_save_and_load_meta(tmp_path):
   state: TrainingState = {
     "step": 100,
     "best_loss": 0.001,
+    "best_feasible_sn": 0.5,
     METRIC_WEC: constraint_state,
     METRIC_EXPAND: constraint_state,
     METRIC_SHEAR: constraint_state,
