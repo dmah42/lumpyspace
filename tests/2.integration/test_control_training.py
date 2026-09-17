@@ -63,6 +63,7 @@ def test_control_training_loop() -> None:
     learning_rate=1e-4,
     key=train_key,
     log_path=None,
+    penalty_log_path=None,
   )
 
   assert trained_model is not None

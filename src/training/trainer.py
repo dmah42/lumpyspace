@@ -44,8 +44,29 @@ START_W_PENALTY = 1.0
 FEASIBILITY_EPS = 1e-9
 
 
+CSV_FIELDNAMES = [
+  "step",
+  METRIC_LOSS,
+  METRIC_PHYS,
+  METRIC_WEC,
+  METRIC_EXPAND,
+  METRIC_SHEAR,
+  METRIC_SPATIAL,
+  METRIC_SN,
+  METRIC_BAO,
+  METRIC_OMEGA_M,
+]
+
+# Sidecar log for adaptive Augmented Lagrangian bump/decay events, kept
+# separate from training_metrics.csv so that file's schema stays fixed to
+# core training metrics only.
+PENALTY_LOG_FIELDNAMES = ["step", "constraint", "action", "w_penalty", "lambda_val"]
+
+
 @contextmanager
-def _get_log_writer(log_path: str | None, resume: bool = False):
+def _get_log_writer(
+  log_path: str | None, fieldnames: list[str], resume: bool = False
+):
   """Helper to handle optional CSV logging."""
   if log_path is None:
     yield None
@@ -54,21 +75,7 @@ def _get_log_writer(log_path: str | None, resume: bool = False):
     file_exists = os.path.exists(log_path) and os.path.getsize(log_path) > 0
     mode = "a" if (resume and file_exists) else "w"
     with open(log_path, mode=mode, newline="") as log_file:
-      log_writer = csv.DictWriter(
-        log_file,
-        fieldnames=[
-          "step",
-          METRIC_LOSS,
-          METRIC_PHYS,
-          METRIC_WEC,
-          METRIC_EXPAND,
-          METRIC_SHEAR,
-          METRIC_SPATIAL,
-          METRIC_SN,
-          METRIC_BAO,
-          METRIC_OMEGA_M,
-        ],
-      )
+      log_writer = csv.DictWriter(log_file, fieldnames=fieldnames)
       if not (resume and file_exists):
         log_writer.writeheader()
       yield log_writer, log_file
@@ -113,6 +120,7 @@ def train_model(
   kick_period_mult: float = 1.5,
   peak_learning_rate: float = 1e-3,
   log_path: str | None = "logs/training_metrics.csv",
+  penalty_log_path: str | None = "logs/penalty_events.csv",
   checkpoint_path: str | None = None,
   key: jax.Array | None = None,
   w_efe: float = 1.0,
@@ -316,7 +324,12 @@ def train_model(
     if os.path.exists(opt_path):
       opt_state = eqx.tree_deserialise_leaves(opt_path, opt_state)
 
-  with _get_log_writer(log_path, resume=resume) as writer_context:
+  with (
+    _get_log_writer(log_path, CSV_FIELDNAMES, resume=resume) as writer_context,
+    _get_log_writer(
+      penalty_log_path, PENALTY_LOG_FIELDNAMES, resume=resume
+    ) as penalty_writer_context,
+  ):
     for i in range(max_steps):
       key, subkey = jax.random.split(key)
 
@@ -350,12 +363,22 @@ def train_model(
         manager = constraints[k]
         val = float(metrics[k])
         action = manager.update(val, current_step, adaptive_check_interval)
-        if action == PenaltyAction.BUMPED:
+        if action in (PenaltyAction.BUMPED, PenaltyAction.DECAYED):
           w_val = manager.scheduler.w_penalty
-          print(f"Adaptive Penalty: {k} bumped to {w_val:.1f}")
-        elif action == PenaltyAction.DECAYED:
-          w_val = manager.scheduler.w_penalty
-          print(f"Adaptive Penalty: {k} decayed to {w_val:.1f}")
+          verb = "bumped" if action == PenaltyAction.BUMPED else "decayed"
+          print(f"Adaptive Penalty: {k} {verb} to {w_val:.1f}")
+          if penalty_writer_context:
+            p_writer, p_file = penalty_writer_context
+            p_writer.writerow(
+              {
+                "step": current_step,
+                "constraint": k,
+                "action": action.value,
+                "w_penalty": f"{w_val:.6e}",
+                "lambda_val": f"{manager.lambda_val:.6e}",
+              }
+            )
+            p_file.flush()
 
       # Logging & Telemetry
       if writer_context and i % 10 == 0:
