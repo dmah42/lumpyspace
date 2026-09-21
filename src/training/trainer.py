@@ -460,8 +460,7 @@ def train_model(
         best_feasible_sn = current_sn
         if checkpoint_path:
           print(
-            f"Saving best FEASIBLE model (SN chi2={current_sn:.6e}) at step "
-            f"{current_step}..."
+            f"Saving best feasible model at step {current_step}..."
           )
           save_checkpoint(
             checkpoint_path,
@@ -475,7 +474,7 @@ def train_model(
 
       if patience_counter >= patience:
         print(
-          f"Early stopping triggered at step {current_step} (patience reached)."
+          f"Patience reached at step {current_step}."
         )
         break
 

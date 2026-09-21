@@ -451,6 +451,37 @@ for shear.
   - **Success Criterion:** The macroscopic geometry, expansion history, and
     Pantheon+ fit remain consistent across seeds, demonstrating that the
     lumpiness is an emergent physical necessity of inhomogeneous cosmology.
+
+- **Task 4.11: CMB Collocation Sampling Density [FUTURE]**
+  - **Goal:** `N_cmb = 50` (the CMB boundary slice's point count) is 20x
+    sparser than the `N = 1000` used for the main EFE/spatial-weight
+    sampling, despite both covering the same $[-1,1]^3$ spatial cube — the
+    CMB block's narrow time window ($t \in [-4.0, -3.990]$) only justifies
+    fewer _time_ samples, not fewer _spatial_ ones. Because
+    `t_cmb`/`spatial_cmb` are combined via row-wise
+    `jnp.concatenate(..., axis=1)`, the two are currently forced to share one
+    count, so the narrow-slice justification silently starves spatial
+    coverage too. This risks under-sampling the localized curvature/shear
+    "lumps" that are the whole thesis of this project, and undermines the
+    feasibility-gate calibration (Task 4.9's `FEASIBILITY_EPS`), since that
+    gate checks raw per-step (non-EMA-smoothed) values that a thin N=50 draw
+    can make noisier than they should be.
+  - **Implementation:** Either (a) raise `N_cmb` as a simple shared count
+    (a moderate ~200 gives a real but modest noise reduction; matching
+    `N=1000` fully matches EFE's spatial density at 20x the CMB compute), or
+    (b) decouple the two axes structurally — e.g. broadcast/tile a small set
+    of distinct time-locations across an independently-sized, larger spatial
+    batch, instead of the current 1:1 pairing.
+  - **Caveat:** `l_wec` already uses `N=1000` and has still plateaued for
+    thousands of steps under growing AL pressure, suggesting its difficulty
+    is intrinsic (satisfying non-negativity across every sampled point
+    simultaneously) rather than a sampling-density artifact — so expect this
+    change to remove a plausible confound and make the feasibility gate more
+    trustworthy, not to obviously unlock compliance on its own.
+  - **Success Criterion:** `l_spatial`'s achieved minimum and variance
+    measurably change (in either direction) at higher `N_cmb`, and/or the
+    feasibility gate's behavior becomes more stable across re-reads at the
+    same training state.
 ---
 
 ## 5. Advanced Training Dynamics: Batching & Gradient Balancing
