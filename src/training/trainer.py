@@ -16,6 +16,7 @@ from src.training.constraints import ConstraintManager
 from src.training.loss import (
   CONSTRAINT_METRICS,
   METRIC_BAO,
+  METRIC_SN_COVER,
   METRIC_EXPAND,
   METRIC_LOSS,
   METRIC_MEAN_W_SPATIAL,
@@ -59,6 +60,7 @@ CSV_FIELDNAMES = [
   METRIC_SPATIAL,
   METRIC_SN,
   METRIC_BAO,
+  METRIC_SN_COVER,
   METRIC_OMEGA_M,
 ]
 
@@ -114,7 +116,9 @@ def save_checkpoint(
 def train_model(
   model: eqx.Module,
   data: tuple[
-    tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray],
+    # Supernovae: (z, mu, mu_err, direction)
+    tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray],
+    # BAO: (z, dm_obs, dh_obs, cov_inv)
     tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray],
   ],
   max_steps: int = 10000,
@@ -131,6 +135,12 @@ def train_model(
   w_efe: float = 1.0,
   w_sn: float = 10.0,
   w_bao: float = 0.5,
+  # Sized so that leaving a source unreachable is never cheaper than fitting
+  # it badly: w_sn_cover * (typical shortfall ~ 0.25) >= w_sn * (chi^2 of a
+  # bad fit ~ 50). Safe to set high because l_sn_cover is a hinge - it is
+  # exactly zero once coverage is achieved, so it costs nothing at
+  # convergence, unlike a weight on a term with a nonzero floor.
+  w_sn_cover: float = 2000.0,
   adaptive_check_interval: int = 1000,
   resume: bool = False,
   max_impulse_steps: int = 100,
@@ -165,7 +175,7 @@ def train_model(
   opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
 
   sn_data, bao_data = data
-  sn_z, sn_mu, sn_err = sn_data
+  sn_z, sn_mu, sn_err, sn_dir = sn_data
   bao_z, bao_dm, bao_dh, bao_cov = bao_data
 
   @eqx.filter_jit
@@ -176,6 +186,7 @@ def train_model(
     sn_z: jnp.ndarray,
     sn_mu: jnp.ndarray,
     sn_err: jnp.ndarray,
+    sn_dir: jnp.ndarray,
     bao_z: jnp.ndarray,
     bao_dm: jnp.ndarray,
     bao_dh: jnp.ndarray,
@@ -253,7 +264,9 @@ def train_model(
       mean_w_spatial = jnp.mean(w_4d_vals)
 
       # 2. Data Loss (Supernova chi-squared)
-      l_sn = get_data_loss(model, sn_z, sn_mu, sn_err)
+      l_sn, l_sn_cover = get_data_loss(
+        model, sn_z, sn_mu, sn_err, sn_dir
+      )
 
       # 3. BAO Loss (3D Chi-squared)
       l_bao = jax.lax.cond(
@@ -266,7 +279,11 @@ def train_model(
       # Total Loss seamlessly integrates the spatially weighted physical errors
       # (EFE + AL WEC) with the global data losses and CMB constraints.
       total_loss = (
-        total_weighted_phys + cmb_penalty + w_sn * l_sn + w_bao * l_bao
+        total_weighted_phys
+        + cmb_penalty
+        + w_sn * l_sn
+        + w_bao * l_bao
+        + w_sn_cover * l_sn_cover
       )
       return total_loss, {
         METRIC_LOSS: total_loss,
@@ -277,6 +294,7 @@ def train_model(
         METRIC_SPATIAL: l_spatial_cmb,
         METRIC_SN: l_sn,
         METRIC_BAO: l_bao,
+        METRIC_SN_COVER: l_sn_cover,
         METRIC_OMEGA_M: omega_m_today[0],
         METRIC_MEAN_W_SPATIAL: mean_w_spatial,
       }
@@ -352,6 +370,7 @@ def train_model(
         sn_z,
         sn_mu,
         sn_err,
+        sn_dir,
         bao_z,
         bao_dm,
         bao_dh,
@@ -399,6 +418,7 @@ def train_model(
             METRIC_SPATIAL: f"{float(metrics[METRIC_SPATIAL]):.6e}",
             METRIC_SN: f"{float(metrics[METRIC_SN]):.6e}",
             METRIC_BAO: f"{float(metrics[METRIC_BAO]):.6e}",
+            METRIC_SN_COVER: f"{float(metrics[METRIC_SN_COVER]):.6e}",
             METRIC_OMEGA_M: f"{float(metrics[METRIC_OMEGA_M]):.6e}",
           }
         )
@@ -422,7 +442,8 @@ def train_model(
           f"step {current_step}, loss: {current_loss:.6e} | "
           f"{METRIC_PHYS}: {float(metrics[METRIC_PHYS]):.3e} | "
           f"{METRIC_SN}: {float(metrics[METRIC_SN]):.3e} | "
-          f"{METRIC_WEC}: {float(metrics[METRIC_WEC]):.3e}"
+          f"{METRIC_WEC}: {float(metrics[METRIC_WEC]):.3e} | "
+          f"{METRIC_SN_COVER}: {float(metrics[METRIC_SN_COVER]):.3e}"
         )
 
       # Early Stopping & Safety Checks

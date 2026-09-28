@@ -161,25 +161,55 @@ def _integrate_geodesic(
   return sol
 
 
+def make_null_direction(
+  g_obs: jnp.ndarray, direction: jnp.ndarray, kt: float = 1.0
+) -> jnp.ndarray:
+  """
+  Builds a past-directed null 4-vector pointing along a sky direction.
+
+  Solves g_mu_nu k^mu k^nu = 0 for k = (kt, -s * n_hat), which is a quadratic
+  in s. The previous implementation assumed the ray ran along +x and used only
+  g_00/g_11, silently ignoring the shift terms g_0i - so the initial ray was
+  not actually null whenever the metric had off-diagonal time-space
+  components.
+
+  The spatial part is negated because the affine parameter runs backwards
+  (l: 0 -> L_MAX < 0), so position advances along +n_hat into the past.
+  """
+  n = direction / jnp.sqrt(jnp.sum(jnp.square(direction)) + 1e-12)
+
+  # g_mu_nu k^mu k^nu = A s^2 + B s + C with k_spatial = -s * n
+  a = jnp.einsum("ij,i,j->", g_obs[1:4, 1:4], n, n)
+  b = -2.0 * kt * jnp.einsum("i,i->", g_obs[0, 1:4], n)
+  c = g_obs[0, 0] * kt**2
+
+  disc = jnp.maximum(b**2 - 4.0 * a * c, 1e-12)
+  s = (-b + jnp.sqrt(disc)) / (2.0 * a + 1e-12)
+
+  return jnp.concatenate([jnp.array([kt]), -s * n])
+
+
 def get_luminosity_distance(
   metric_fn: Callable[[jnp.ndarray], jnp.ndarray],
   z_target: float,
+  direction: jnp.ndarray,
   should_log: bool = False,
-) -> jnp.ndarray:
+) -> tuple[jnp.ndarray, jnp.ndarray]:
   """
   Calculates dL(z) by integrating null geodesics backwards from observer.
 
   Observer is placed at t=1.0 (today) in the normalized training domain.
-  Returns distance in Mpc.
+  `direction` is a required unit 3-vector giving the source's position on
+  the sky. It has no default: every caller must say where it is looking.
+
+  Returns (dL_mpc, z_reached). dL_mpc is only meaningful where
+  z_reached >= z_target - callers MUST check. This function no longer
+  fabricates a distance for unreachable targets.
   """
   # 1. Setup Observer at t=1.0 (Present day)
   obs_coords = jnp.array([1.0, 0.0, 0.0, 0.0])
   g_obs = metric_fn(obs_coords)
-  kt = 1.0
-  # Ensure kx is null: g00*kt^2 + g11*kx^2 = 0
-  # Use epsilon to avoid singular gradients at sqrt(0)
-  kx = kt * jnp.sqrt(jnp.abs(g_obs[0, 0]) / jnp.abs(g_obs[1, 1]) + 1e-9)
-  initial_k = jnp.array([kt, kx, 0.0, 0.0])
+  initial_k = make_null_direction(g_obs, direction)
   initial_state = jnp.concatenate([obs_coords, initial_k])
 
   # 2. Integrate
@@ -207,18 +237,29 @@ def get_luminosity_distance(
 
   z_vals, dl_vals = jax.vmap(compute_z_dl)(safe_ys)
 
-  # Safely compute maximums without hitting NaN
-  safe_z_for_max = jnp.where(is_finite_state, z_vals, -1.0)
-  max_z_found = jnp.max(safe_z_for_max)
+  # z along the ray is NOT monotonic in general - a contracting or lumpy
+  # region produces blueshift segments, and jnp.interp silently returns
+  # garbage on unsorted xp. Take a running maximum so the interpolation
+  # precondition actually holds, and carry invalid tail states forward at
+  # their last valid value rather than at the global max (which previously
+  # made interp return that max for every z_target).
+  z_masked = jnp.where(is_finite_state, z_vals, -jnp.inf)
+  z_monotonic = jax.lax.cummax(z_masked)
+  # Any leading -inf (shouldn't happen: state 0 is the observer) -> 0.0
+  safe_z_vals = jnp.where(jnp.isfinite(z_monotonic), z_monotonic, 0.0)
 
-  # Force invalid entries to plateau at the maximum valid values
-  # This ensures jnp.interp receives a monotonic array and returns the last
-  # valid dl
-  safe_z_vals = jnp.where(is_finite_state, z_vals, max_z_found)
+  # Reachability is "how far did this ray actually get", i.e. the redshift at
+  # the last finite state - NOT the best it managed anywhere along the path,
+  # which would reward a ray that redshifts briefly then blueshifts back.
+  # Note this must read z_vals, not the cummax above: safe_z_vals[-1] is by
+  # construction the running maximum, which is exactly what we don't want.
+  last_finite = jnp.max(
+    jnp.where(is_finite_state, jnp.arange(len(is_finite_state)), 0)
+  )
+  z_reached = z_vals[last_finite]
 
-  safe_dl_for_max = jnp.where(is_finite_state, dl_vals, 0.0)
-  max_dl_found = jnp.max(safe_dl_for_max)
-  safe_dl_vals = jnp.where(is_finite_state, dl_vals, max_dl_found)
+  dl_masked = jnp.where(is_finite_state, dl_vals, 0.0)
+  safe_dl_vals = jax.lax.cummax(dl_masked)
 
   # Diagnostics
   if os.environ.get("LUMPY_DEBUG") == "1":
@@ -226,40 +267,27 @@ def get_luminosity_distance(
       should_log,
       lambda: jax.debug.print(
         "\n--- dL Diagnostics ---\n"
-        "sol.t1: {t1} | sol.result: {res}\n"
-        "z_target: {z}\nmax_z_found: {zmax}\n"
-        "Final z_vals: {zv}",
-        t1=sol.t1,
+        "sol.result: {res}\n"
+        "z_target: {z}\nz_reached: {zr}\n"
+        "finite states: {nf}/{nt}",
         res=sol.result,
         z=z_target,
-        zmax=max_z_found,
-        zv=z_vals,
+        zr=z_reached,
+        nf=jnp.sum(is_finite_state),
+        nt=len(is_finite_state),
       ),
       lambda: None,
     )
 
-  # 4. Result via interpolation
-  # Everything is finite by construction.
+  # 4. Result via interpolation over the (now monotonic) reachable range.
+  # For z_target > z_reached this clamps, and the value is meaningless - the
+  # caller is responsible for masking on z_reached.
   result = jnp.interp(z_target, safe_z_vals, safe_dl_vals)
 
-  # REDSHIFT PENALTY (Optimizer Compass):
-  # Drive expansion if target redshift was unreachable.
-  # We use a unitless penalty scaled to match the dL_unit order of magnitude.
-  penalty = jnp.where(
-    max_z_found < z_target, 10 * (z_target - max_z_found), 0.0
-  )
-
-  if os.environ.get("LUMPY_DEBUG") == "1":
-    jax.lax.cond(
-      should_log,
-      lambda: jax.debug.print(
-        "Interp result: {r}\nPenalty: {p}", r=result, p=penalty
-      ),
-      lambda: None,
-    )
-
-  # Convert back to physical Mpc
-  return (result + penalty) * L_UNIT
+  # Convert back to physical Mpc. Reachability is reported separately rather
+  # than folded into the distance, so the two failure modes (wrong distances
+  # vs. insufficient redshift range) cannot trade off inside one scalar.
+  return result * L_UNIT, z_reached
 
 
 def get_bao_distances(

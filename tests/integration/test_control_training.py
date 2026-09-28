@@ -38,7 +38,12 @@ def test_control_training_loop() -> None:
   # 1. Load Mock Data
   sn_data = load_mock_data()
   # Use a smaller subset for fast integration test
-  subset_sn = (sn_data[0][:5], sn_data[1][:5], sn_data[2][:5])
+  subset_sn = (
+    sn_data[0][:5],
+    sn_data[1][:5],
+    sn_data[2][:5],
+    sn_data[3][:5],
+  )
 
   # Create a dummy mock BAO dataset: (z, dm, dh, cov_inv)
   # We just need it to run without shape errors.

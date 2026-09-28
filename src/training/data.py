@@ -13,21 +13,62 @@ def load_mock_data(
   z_max: float = 2.0,
   h0: float = 70.0,
   om0: float = 0.3,
-) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-  """Generates synthetic FLRW supernova data directly in memory."""
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+  """
+  Generates synthetic FLRW supernova data directly in memory.
+
+  Sources are spread evenly over the sky via a Fibonacci sphere. The mock
+  cosmology is isotropic, so the true distance is direction-independent by
+  construction - which makes this a stress test of the directional
+  ray-tracer: every direction must return the same dL(z).
+  """
   cosmo = FlatLambdaCDM(H0=h0, Om0=om0)
   z = np.linspace(0.01, z_max, num_samples)
   mu = cosmo.distmod(z).value
   z_jnp = jnp.array(z)
-  return z_jnp, jnp.array(mu), jnp.ones_like(z_jnp)
+  return z_jnp, jnp.array(mu), jnp.ones_like(z_jnp), fibonacci_sphere(
+    num_samples
+  )
+
+
+def fibonacci_sphere(n: int) -> jnp.ndarray:
+  """Deterministic, near-uniform unit vectors over the sphere."""
+  i = np.arange(n)
+  phi = np.arccos(1.0 - 2.0 * (i + 0.5) / n)
+  theta = np.pi * (1.0 + 5.0**0.5) * i
+  return jnp.array(
+    np.stack(
+      [np.cos(theta) * np.sin(phi), np.sin(theta) * np.sin(phi), np.cos(phi)],
+      axis=-1,
+    )
+  )
+
+
+def radec_to_unit_vector(
+  ra_deg: np.ndarray, dec_deg: np.ndarray
+) -> jnp.ndarray:
+  """Converts equatorial sky coordinates to Cartesian unit vectors."""
+  ra = np.deg2rad(ra_deg)
+  dec = np.deg2rad(dec_deg)
+  return jnp.array(
+    np.stack(
+      [np.cos(dec) * np.cos(ra), np.cos(dec) * np.sin(ra), np.sin(dec)],
+      axis=-1,
+    )
+  )
 
 
 def load_pantheon_plus(
   file_path: str = "data/pantheon_plus.dat",
-) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
   """
   Loads the Pantheon+ supernova dataset.
-  Columns: zCMB, MU_SH0ES, MU_SH0ES_ERR_DIAG
+  Columns: zCMB, MU_SH0ES, MU_SH0ES_ERR_DIAG, RA, DEC
+
+  Returns (z, mu, err, direction) where direction is a unit 3-vector per
+  supernova. Without it every source would be traced along the same fixed
+  ray, leaving the model's anisotropic structure unconstrained in every
+  direction but one.
   """
   # Space-separated file
   df = pd.read_csv(file_path, sep=" ")
@@ -36,10 +77,11 @@ def load_pantheon_plus(
   z = jnp.array(df["zCMB"].values)
   mu = jnp.array(df["MU_SH0ES"].values)
   err = jnp.array(df["MU_SH0ES_ERR_DIAG"].values)
+  direction = radec_to_unit_vector(df["RA"].values, df["DEC"].values)
 
   # Filter out negative redshifts or invalid data if any
   mask = z > 0
-  return z[mask], mu[mask], err[mask]
+  return z[mask], mu[mask], err[mask], direction[mask]
 
 
 def load_bao_data(

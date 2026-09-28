@@ -52,7 +52,12 @@ def test_flrw_distance_match():
 
   # Test redshifts
   for z_test in [0.1, 0.5]:
-    dl_numeric = get_luminosity_distance(flrw_eds_metric, z_test)
+    dl_numeric, z_reached = get_luminosity_distance(
+      flrw_eds_metric, z_test, direction=jnp.array([1.0, 0.0, 0.0])
+    )
+    assert z_reached >= z_test, (
+      f"ray did not reach z={z_test} (got {z_reached})"
+    )
 
     # Analytic dL for Einstein-de Sitter
     dl_analytic = (2.0 / h0_mpc) * (1.0 + z_test - jnp.sqrt(1.0 + z_test))

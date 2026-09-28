@@ -19,6 +19,7 @@ METRIC_SHEAR = "l_shear"
 METRIC_SPATIAL = "l_spatial"
 METRIC_SN = "l_sn"
 METRIC_BAO = "l_bao"
+METRIC_SN_COVER = "l_sn_cover"
 METRIC_OMEGA_M = "omega_m"
 METRIC_MEAN_W_SPATIAL = "mean_w_spatial"
 
@@ -98,29 +99,49 @@ def get_data_loss(
   redshifts: jnp.ndarray,
   target_mu: jnp.ndarray,
   mu_err: jnp.ndarray,
-) -> jnp.ndarray:
+  directions: jnp.ndarray,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
   """
   Data loss against Supernova distance modulus.
-  dL is computed via the geodesic ray-tracer.
-  mu = 5 * log10(dL_mpc) + 25
+  dL is computed via the geodesic ray-tracer along each source's own sky
+  direction. mu = 5 * log10(dL_mpc) + 25
 
-  Computes the weighted chi-squared statistic.
+  Returns (l_sn, l_sn_cover):
+    l_sn:       weighted chi-squared. Unreachable supernovae contribute zero
+                to the numerator but STILL COUNT in the denominator - with a
+                moving denominator the model could shed a badly-fit source by
+                making it unreachable, which is the same perverse incentive
+                the old compass had.
+    l_sn_cover: mean redshift shortfall over all supernovae. A hinge, so it
+                is exactly zero once every ray reaches its source.
+
+  These are kept separate on purpose. Folding shortfall into the returned
+  distance (the old "Optimizer Compass") made the two failure modes fungible
+  inside one scalar, and the optimizer settled in a basin where neither was
+  solved - see Task 4.12 in docs/technical_design.md.
   """
   # To avoid a terminal firehose, we only log diagnostics for the first
   # supernova in each batch.
   should_log_batch = jnp.zeros(len(redshifts), dtype=bool).at[0].set(True)
 
-  # Vectorize over redshifts and logging flags
+  # Vectorize over redshifts, directions and logging flags
   v_get_dl = jax.vmap(
-    lambda z, sl: get_luminosity_distance(metric_fn, z, should_log=sl)
+    lambda z, d, sl: get_luminosity_distance(
+      metric_fn, z, direction=d, should_log=sl
+    )
   )
-  dl_mpc = v_get_dl(redshifts, should_log_batch)
+  dl_mpc, z_reached = v_get_dl(redshifts, directions, should_log_batch)
 
-  # Avoid log10(0) or negative distances
-  mu_pred = 5.0 * jnp.log10(jnp.abs(dl_mpc) + 1e-6) + 25.0
+  # A source is only fit if its ray actually got there. No abs() - a negative
+  # distance is a failure, not something to quietly rectify.
+  reached = z_reached >= redshifts
+  mu_pred = 5.0 * jnp.log10(jnp.maximum(dl_mpc, 1e-6)) + 25.0
+  chi2 = jnp.square((mu_pred - target_mu) / mu_err)
 
-  # Weighted Chi-Squared: mean( ((pred - obs) / err)^2 )
-  return jnp.mean(jnp.square((mu_pred - target_mu) / mu_err))
+  l_sn = jnp.sum(jnp.where(reached, chi2, 0.0)) / len(redshifts)
+  l_sn_cover = jnp.mean(jnp.maximum(0.0, redshifts - z_reached))
+
+  return l_sn, l_sn_cover
 
 
 def get_bao_loss(

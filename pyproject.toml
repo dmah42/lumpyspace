@@ -17,6 +17,7 @@ dev = [
   "ipykernel",
   "IPython",
   "matplotlib",
+  "mypy",
   "nbconvert",
   "pre-commit",
   "pytest",
@@ -37,5 +38,15 @@ skip-magic-trailing-comma = false
 line-ending = "lf"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# Order matters: unit tests run before integration. This is declared here
+# rather than encoded in directory names (the old tests/1.unit) so the
+# directories stay valid Python module paths and can be type-checked.
+testpaths = ["tests/unit", "tests/integration"]
 pythonpath = ["src"]
+
+[tool.mypy]
+files = ["src", "tests"]
+explicit_package_bases = true
+mypy_path = "."
+# jax, equinox, diffrax and astropy ship partial or no stubs.
+ignore_missing_imports = true

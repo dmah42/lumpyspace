@@ -17,7 +17,9 @@ def test_distance_gradient_finiteness():
   z_target = 2.26
 
   def loss_fn(m):
-    dl = get_luminosity_distance(m, z_target)
+    dl, _z_reached = get_luminosity_distance(
+      m, z_target, direction=jnp.array([1.0, 0.0, 0.0])
+    )
     return dl
 
   # Compute value and gradient

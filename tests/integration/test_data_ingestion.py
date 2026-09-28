@@ -16,12 +16,17 @@ from src.training.data import load_pantheon_plus
 )
 def test_load_pantheon_plus_integrity():
   """Verifies the real dataset loads with expected dimensions and values."""
-  z, mu, err = load_pantheon_plus("data/pantheon_plus.dat")
+  z, mu, err, direction = load_pantheon_plus("data/pantheon_plus.dat")
 
   # Check dimensions (1701 supernovae in Pantheon+)
   assert len(z) == 1701
   assert len(mu) == 1701
   assert len(err) == 1701
+  assert direction.shape == (1701, 3)
+
+  # Directions must be unit vectors
+  norms = jnp.linalg.norm(direction, axis=-1)
+  assert jnp.allclose(norms, 1.0, atol=1e-5)
 
   # Check for NaNs
   assert not jnp.any(jnp.isnan(z))

@@ -482,6 +482,79 @@ for shear.
     measurably change (in either direction) at higher `N_cmb`, and/or the
     feasibility gate's behavior becomes more stable across re-reads at the
     same training state.
+
+- **Task 4.12: Unreachable-Redshift Defect & Observational Channel Rebuild
+  [DEFECT — BLOCKING]**
+  - **Symptom (measured 2026-09-28, checkpoint at step ~10.6k):** null
+    geodesics accumulate a total redshift of $z \approx 2\times10^{-5}$ over
+    the _entire_ affine path (`sol.t1` reaches `L_MAX = -10` every time).
+    100% of sampled Pantheon+ supernovae are unreachable — including the
+    nearest at $z = 0.0012$, still ~60x beyond range.
+  - **Mechanism:** `get_luminosity_distance` does not fail on unreachable
+    targets. `jnp.interp` clamps to the trajectory endpoint, and the
+    "Optimizer Compass" adds `10 * (z_target - max_z_found)`. The returned
+    value reduces to $d_L \approx 10^4 z - 105$ Mpc — a linear function of
+    the _target_ redshift with a near-constant geometric offset. Measured:
+    $z=0.0030 \to -75.3$ (formula $-75$); $z=0.0199 \to 94.1$ ($94$);
+    $z=0.0283 \to 177.7$ ($178$). Negative (unphysical) distances are then
+    silently absolved by `jnp.abs(dl_mpc)` in `get_data_loss`.
+  - **Consequence:** `l_sn` has been measuring redshift shortfall, not fit
+    quality. Measured per-SN $\chi^2$ on a random subsample: 46, matching the
+    logged 29-90 range. **No distance-redshift physics has entered the
+    objective.** The defect dates to `d62abd2` (2026-05-17), so results from
+    blog posts 4 and 5 both require re-verification. The ray-tracer itself is
+    sound — `test_flrw_distance_match` validates it to 5% against analytic
+    EdS; it is being handed a static spacetime.
+  - **Root cause — Minkowski is a global minimum of every physics term:**
+    $\mathcal{L}_{phys}$ ($G=0$, and `kappa_rho_0 = omega_m * 3 * h_mean**2`
+    zeroes the stress-energy whenever $H \to 0$, _regardless of_ $\Omega_m$),
+    $l_{wec}$ ($R=0$), $l_{expand}$ ($H_i=0$), $l_{shear}$ ($\sigma^2=0$),
+    $l_{spatial}$ (no gradients). Only the supernova term can push the metric
+    off flat static space, and that channel was severed.
+  - **Remediation (sequenced deliberately — see Success Criterion):**
+    - **C. Reachability-honest SN loss.** Stop folding shortfall into the
+      returned distance. Compare model against observation only over the
+      $z$-range the ray actually covers; carry coverage as its own explicit,
+      separately-reported term. Removes the fungibility that let the two
+      failure modes trade off inside one scalar.
+    - **D. Coverage-term form.** A design detail _within_ C, not a separate
+      change. Prefer the trajectory endpoint redshift over `jnp.max`: the
+      current metric is non-monotonic (H_mean is negative today, so blueshift
+      segments are plausible) and `jnp.max` rewards a ray that redshifts
+      briefly then blueshifts back. Reserve "accumulate over all 50 saved
+      segments" as the thicker fallback if the endpoint form stalls.
+    - **E. Absolute density parameterization.** Replace the derived
+      `kappa_rho_0 = omega_m * 3 * h_mean**2` with a free absolute $\rho_0$
+      plus a baryonic floor. Flat static space with $\rho_0 > 0$ then yields
+      a nonzero EFE residual, so "there is matter here" becomes incompatible
+      with empty static space — a real expansion gradient. $\Omega_m$ becomes
+      a _derived, reported_ quantity rather than a knob clipped to
+      $[0.05, 0.3]$, which is strictly more tabula rasa than the status quo.
+    - **B′. Anisotropic time-symmetry breaking at init (optional).** Minkowski
+      is maximally symmetric (10-parameter isometry group) and is therefore
+      _not_ a neutral prior — it assumes perfect homogeneity, perfect isotropy
+      and staticity simultaneously. SIREN $\omega_0$ already addressed the
+      spatial half of this (see blog post 5); the temporal half was never
+      addressed. Seed the spatial components to grow in $t$ at _different,
+      randomly-drawn rates per axis_: that breaks staticity without assuming
+      FLRW, since expansion rate, history, anisotropy and any convergence
+      toward isotropy all remain learned. Explicitly **not** an FLRW
+      background or FLRW pretraining — both would bake in the homogeneity and
+      isotropy this project exists to interrogate, and would make Task 4.10's
+      initialization-echo ablation unanswerable.
+  - **Rejected:** anchoring $H_0$ via an explicit `(H(t=1) - H_0)^2` term.
+    Although `MU_SH0ES` carries an absolute scale from the Cepheid ladder, the
+    correct implication is that a _working_ SN channel should recover $H_0$
+    from the data unaided — the 78x shortfall is evidence the channel is
+    broken, not grounds for propping it up with a prior.
+  - **Success Criterion:** Apply **C + D** alone first, as a clean experiment
+    that tests whether the severed channel was the entire story. Diagnosis is
+    cheap: if `max_z_found` has not climbed off $2\times10^{-5}$ within a few
+    hundred steps, C+D is insufficient and **E** follows with clear rationale
+    rather than as a simultaneous confound. If it does climb, E becomes
+    optional cleanup rather than load-bearing, and **B′** is only warranted if
+    C+D+E still cannot escape the static basin.
+
 ---
 
 ## 5. Advanced Training Dynamics: Batching & Gradient Balancing

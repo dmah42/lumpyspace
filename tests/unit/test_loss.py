@@ -115,11 +115,23 @@ def test_data_loss_computation():
   z_vals = jnp.array([0.1, 0.5])
   target_mu = jnp.array([35.0, 40.0])
   mu_err = jnp.array([0.1, 0.2])
+  # Two different sky directions: this metric is isotropic, so coverage and
+  # distances must not depend on which way the ray is fired.
+  directions = jnp.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
 
-  loss = get_data_loss(flrw_metric, z_vals, target_mu, mu_err)
+  loss, cover = get_data_loss(
+    flrw_metric, z_vals, target_mu, mu_err, directions
+  )
 
   assert not jnp.isnan(loss), "Data loss returned NaN."
   assert loss.shape == (), f"Expected scalar loss, got shape {loss.shape}"
+  assert not jnp.isnan(cover), "Coverage loss returned NaN."
+  assert cover.shape == (), f"Expected scalar coverage, got {cover.shape}"
+  assert cover >= 0.0, "Coverage shortfall cannot be negative."
+
+  # This expanding FLRW metric should actually reach both targets, so the
+  # coverage hinge must be exactly zero and the fit term strictly positive.
+  assert cover == 0.0, f"Expected full coverage, got shortfall {cover}"
   assert loss > 0.0, "Data loss should be strictly positive."
 
 
