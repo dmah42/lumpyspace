@@ -11,12 +11,12 @@ import jax
 import jax.numpy as jnp
 import optax
 
+from src.core.metric import MetricNN
 from src.training.checkpoint import TrainingState, load_meta, save_meta
 from src.training.constraints import ConstraintManager
 from src.training.loss import (
   CONSTRAINT_METRICS,
   METRIC_BAO,
-  METRIC_SN_COVER,
   METRIC_EXPAND,
   METRIC_LOSS,
   METRIC_MEAN_W_SPATIAL,
@@ -24,6 +24,7 @@ from src.training.loss import (
   METRIC_PHYS,
   METRIC_SHEAR,
   METRIC_SN,
+  METRIC_SN_COVER,
   METRIC_SPATIAL,
   METRIC_WEC,
   apply_spatial_weight,
@@ -67,7 +68,13 @@ CSV_FIELDNAMES = [
 # Sidecar log for adaptive Augmented Lagrangian bump/decay events, kept
 # separate from training_metrics.csv so that file's schema stays fixed to
 # core training metrics only.
-PENALTY_LOG_FIELDNAMES = ["step", "constraint", "action", "w_penalty", "lambda_val"]
+PENALTY_LOG_FIELDNAMES = [
+  "step",
+  "constraint",
+  "action",
+  "w_penalty",
+  "lambda_val",
+]
 
 
 @contextmanager
@@ -101,26 +108,30 @@ def save_checkpoint(
   os.makedirs(os.path.dirname(path), exist_ok=True)
   eqx.tree_serialise_leaves(path, model)
   eqx.tree_serialise_leaves(path + ".opt", opt_state)
-  state: TrainingState = {
-    "step": step,
-    "best_loss": best_loss,
-    "best_feasible_sn": best_feasible_sn,
-    METRIC_WEC: constraints[METRIC_WEC].to_dict(),
-    METRIC_EXPAND: constraints[METRIC_EXPAND].to_dict(),
-    METRIC_SHEAR: constraints[METRIC_SHEAR].to_dict(),
-    METRIC_SPATIAL: constraints[METRIC_SPATIAL].to_dict(),
-  }
+  state = TrainingState(
+    step=step,
+    best_loss=best_loss,
+    best_feasible_sn=best_feasible_sn,
+    l_wec=constraints[METRIC_WEC].to_state(),
+    l_expand=constraints[METRIC_EXPAND].to_state(),
+    l_shear=constraints[METRIC_SHEAR].to_state(),
+    l_spatial=constraints[METRIC_SPATIAL].to_state(),
+  )
   save_meta(path + ".meta", state)
 
 
 def train_model(
-  model: eqx.Module,
+  # MetricNN, not eqx.Module: this function reaches for omega_m_raw,
+  # get_cosmology_today() and get_spatial_weight(), so the wider annotation
+  # was claiming a generality the body does not have.
+  model: MetricNN,
   data: tuple[
     # Supernovae: (z, mu, mu_err, direction)
     tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray],
     # BAO: (z, dm_obs, dh_obs, cov_inv)
     tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray],
   ],
+  key: jax.Array,
   max_steps: int = 10000,
   learning_rate: float = 1e-4,
   target_loss: float = 1e-6,
@@ -131,7 +142,6 @@ def train_model(
   log_path: str | None = "logs/training_metrics.csv",
   penalty_log_path: str | None = "logs/penalty_events.csv",
   checkpoint_path: str | None = None,
-  key: jax.Array | None = None,
   w_efe: float = 1.0,
   w_sn: float = 10.0,
   w_bao: float = 0.5,
@@ -144,7 +154,7 @@ def train_model(
   adaptive_check_interval: int = 1000,
   resume: bool = False,
   max_impulse_steps: int = 100,
-) -> eqx.Module:
+) -> MetricNN:
   """
   Executes the training loop for the PINN.
   Minimizes combined EFE and Data residuals with early stopping and telemetry.
@@ -180,7 +190,7 @@ def train_model(
 
   @eqx.filter_jit
   def step(
-    model: eqx.Module,
+    model: MetricNN,
     opt_state: optax.OptState,
     key: jax.Array,
     sn_z: jnp.ndarray,
@@ -193,7 +203,7 @@ def train_model(
     bao_cov: jnp.ndarray,
     lambdas: dict[str, jnp.ndarray],
     w_penalties: dict[str, jnp.ndarray],
-  ) -> tuple[eqx.Module, optax.OptState, jnp.ndarray, dict[str, jnp.ndarray]]:
+  ) -> tuple[MetricNN, optax.OptState, jnp.ndarray, dict[str, jnp.ndarray]]:
     # We sample coordinates across the physical domain [-4.0, 1.0] in four
     # spans: Supernova data ([-2.5, 1.0]), inactive range ([-3.99, -2.5]),
     # spatial coordinates for the spatial weights ([-1.0, 1.0]), and the CMB
@@ -264,9 +274,7 @@ def train_model(
       mean_w_spatial = jnp.mean(w_4d_vals)
 
       # 2. Data Loss (Supernova chi-squared)
-      l_sn, l_sn_cover = get_data_loss(
-        model, sn_z, sn_mu, sn_err, sn_dir
-      )
+      l_sn, l_sn_cover = get_data_loss(model, sn_z, sn_mu, sn_err, sn_dir)
 
       # 3. BAO Loss (3D Chi-squared)
       l_bao = jax.lax.cond(
@@ -333,16 +341,14 @@ def train_model(
     opt_path = latest_path + ".opt"
     state = load_meta(meta_path)
 
-    start_step = state["step"]
-    best_loss = state["best_loss"]
-    best_feasible_sn = state["best_feasible_sn"]
+    start_step = state.step
+    best_loss = state.best_loss
+    best_feasible_sn = state.best_feasible_sn
 
-    constraints[METRIC_WEC] = ConstraintManager.from_dict(state["l_wec"])
-    constraints[METRIC_EXPAND] = ConstraintManager.from_dict(state["l_expand"])
-    constraints[METRIC_SHEAR] = ConstraintManager.from_dict(state["l_shear"])
-    constraints[METRIC_SPATIAL] = ConstraintManager.from_dict(
-      state["l_spatial"]
-    )
+    constraints[METRIC_WEC] = ConstraintManager.from_state(state.l_wec)
+    constraints[METRIC_EXPAND] = ConstraintManager.from_state(state.l_expand)
+    constraints[METRIC_SHEAR] = ConstraintManager.from_state(state.l_shear)
+    constraints[METRIC_SPATIAL] = ConstraintManager.from_state(state.l_spatial)
 
     if os.path.exists(opt_path):
       opt_state = eqx.tree_deserialise_leaves(opt_path, opt_state)
@@ -480,9 +486,7 @@ def train_model(
       if is_feasible and current_sn < best_feasible_sn:
         best_feasible_sn = current_sn
         if checkpoint_path:
-          print(
-            f"Saving best feasible model at step {current_step}..."
-          )
+          print(f"Saving best feasible model at step {current_step}...")
           save_checkpoint(
             checkpoint_path,
             model,
@@ -494,9 +498,7 @@ def train_model(
           )
 
       if patience_counter >= patience:
-        print(
-          f"Patience reached at step {current_step}."
-        )
+        print(f"Patience reached at step {current_step}.")
         break
 
   return model

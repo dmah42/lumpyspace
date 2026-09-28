@@ -4,6 +4,16 @@ from src.training.scheduler import AdaptivePenaltyState, PenaltyAction
 
 
 @dataclasses.dataclass
+class ConstraintState:
+  """Serialized form of a ConstraintManager, as stored in a .meta file."""
+
+  lambda_val: float
+  w_penalty: float
+  ema_violation: float
+  last_check_violation: float
+
+
+@dataclasses.dataclass
 class ConstraintManager:
   """
   Unifies the tracking of an Augmented Lagrangian multiplier (lambda)
@@ -33,21 +43,21 @@ class ConstraintManager:
     """
     return float(self.lambda_val), float(self.scheduler.w_penalty)
 
-  def to_dict(self) -> dict:
+  def to_state(self) -> ConstraintState:
     """Serializes state for checkpointing."""
-    return {
-      "lambda_val": self.lambda_val,
-      "w_penalty": self.scheduler.w_penalty,
-      "ema_violation": self.scheduler.ema_violation,
-      "last_check_violation": self.scheduler.last_check_violation,
-    }
+    return ConstraintState(
+      lambda_val=self.lambda_val,
+      w_penalty=self.scheduler.w_penalty,
+      ema_violation=self.scheduler.ema_violation,
+      last_check_violation=self.scheduler.last_check_violation,
+    )
 
   @classmethod
-  def from_dict(cls, data: dict) -> "ConstraintManager":
-    """Deserializes state from a checkpoint dictionary."""
+  def from_state(cls, state: ConstraintState) -> "ConstraintManager":
+    """Deserializes state from a checkpoint record."""
     scheduler = AdaptivePenaltyState(
-      w_penalty=data["w_penalty"],
-      ema_violation=data["ema_violation"],
-      last_check_violation=data["last_check_violation"],
+      w_penalty=state.w_penalty,
+      ema_violation=state.ema_violation,
+      last_check_violation=state.last_check_violation,
     )
-    return cls(lambda_val=data["lambda_val"], scheduler=scheduler)
+    return cls(lambda_val=state.lambda_val, scheduler=scheduler)

@@ -11,16 +11,16 @@ from src.core.metric import MetricNN
 from src.core.tensors import get_ricci_tensor
 from src.physics.geodesics import get_bao_distances, get_luminosity_distance
 
-METRIC_LOSS = "loss"
-METRIC_PHYS = "l_phys"
-METRIC_WEC = "l_wec"
-METRIC_EXPAND = "l_expand"
-METRIC_SHEAR = "l_shear"
-METRIC_SPATIAL = "l_spatial"
-METRIC_SN = "l_sn"
 METRIC_BAO = "l_bao"
-METRIC_SN_COVER = "l_sn_cover"
+METRIC_EXPAND = "l_expand"
+METRIC_LOSS = "loss"
 METRIC_OMEGA_M = "omega_m"
+METRIC_PHYS = "l_phys"
+METRIC_SHEAR = "l_shear"
+METRIC_SN = "l_sn"
+METRIC_SN_COVER = "l_sn_cover"
+METRIC_SPATIAL = "l_spatial"
+METRIC_WEC = "l_wec"
 METRIC_MEAN_W_SPATIAL = "mean_w_spatial"
 
 CONSTRAINT_METRICS = (METRIC_WEC, METRIC_EXPAND, METRIC_SHEAR, METRIC_SPATIAL)

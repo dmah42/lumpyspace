@@ -26,8 +26,11 @@ def load_mock_data(
   z = np.linspace(0.01, z_max, num_samples)
   mu = cosmo.distmod(z).value
   z_jnp = jnp.array(z)
-  return z_jnp, jnp.array(mu), jnp.ones_like(z_jnp), fibonacci_sphere(
-    num_samples
+  return (
+    z_jnp,
+    jnp.array(mu),
+    jnp.ones_like(z_jnp),
+    fibonacci_sphere(num_samples),
   )
 
 
@@ -119,10 +122,10 @@ def load_bao_data(
     )
     covs.append(cov)
 
-  covs = jnp.stack(covs)
+  cov_array = jnp.stack(covs)
 
   # Compute inverses
-  cov_invs = jnp.linalg.inv(covs)
+  cov_invs = jnp.linalg.inv(cov_array)
 
   return z, dm_obs, dh_obs, cov_invs
 

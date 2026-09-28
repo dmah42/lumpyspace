@@ -1,7 +1,8 @@
+import dataclasses
 import json
 import os
-from typing import TypedDict
 
+from src.training.constraints import ConstraintState
 from src.training.loss import (
   METRIC_EXPAND,
   METRIC_SHEAR,
@@ -10,17 +11,9 @@ from src.training.loss import (
 )
 
 
-class ConstraintState(TypedDict):
-  """State for a single constraint's Augmented Lagrangian penalty."""
-
-  lambda_val: float
-  w_penalty: float
-  ema_violation: float
-  last_check_violation: float
-
-
-class TrainingState(TypedDict):
-  """Strictly typed dictionary for resuming training state."""
+@dataclasses.dataclass
+class TrainingState:
+  """Training state required to resume a run."""
 
   step: int
   best_loss: float
@@ -33,10 +26,10 @@ class TrainingState(TypedDict):
 
 def save_meta(meta_path: str, state: TrainingState) -> None:
   """
-  Serializes the training state dictionary to a JSON .meta sidecar file.
+  Serializes the training state to a JSON .meta sidecar file.
   """
   with open(meta_path, "w") as meta_f:
-    json.dump(state, meta_f, indent=2)
+    json.dump(dataclasses.asdict(state), meta_f, indent=2)
 
 
 def load_meta(meta_path: str) -> TrainingState:
@@ -83,19 +76,19 @@ def load_meta(meta_path: str) -> TrainingState:
     missing_c_keys = req_c_keys - set(c_data.keys())
     if missing_c_keys:
       raise ValueError(f"Missing constraint keys: {missing_c_keys}")
-    return {
-      "lambda_val": float(c_data["lambda_val"]),
-      "w_penalty": float(c_data["w_penalty"]),
-      "ema_violation": float(c_data["ema_violation"]),
-      "last_check_violation": float(c_data["last_check_violation"]),
-    }
+    return ConstraintState(
+      lambda_val=float(c_data["lambda_val"]),
+      w_penalty=float(c_data["w_penalty"]),
+      ema_violation=float(c_data["ema_violation"]),
+      last_check_violation=float(c_data["last_check_violation"]),
+    )
 
-  return {
-    "step": int(data["step"]),
-    "best_loss": float(data["best_loss"]),
-    "best_feasible_sn": float(data["best_feasible_sn"]),
-    METRIC_WEC: parse_constraint(data[METRIC_WEC]),
-    METRIC_EXPAND: parse_constraint(data[METRIC_EXPAND]),
-    METRIC_SHEAR: parse_constraint(data[METRIC_SHEAR]),
-    METRIC_SPATIAL: parse_constraint(data[METRIC_SPATIAL]),
-  }
+  return TrainingState(
+    step=int(data["step"]),
+    best_loss=float(data["best_loss"]),
+    best_feasible_sn=float(data["best_feasible_sn"]),
+    l_wec=parse_constraint(data[METRIC_WEC]),
+    l_expand=parse_constraint(data[METRIC_EXPAND]),
+    l_shear=parse_constraint(data[METRIC_SHEAR]),
+    l_spatial=parse_constraint(data[METRIC_SPATIAL]),
+  )

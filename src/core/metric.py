@@ -23,7 +23,7 @@ class MetricNN(eqx.Module):
   spatial_weight_net: eqx.nn.MLP
   omega_m_raw: jnp.ndarray
 
-  def __init__(self, key: jax.random.PRNGKey):
+  def __init__(self, key: jax.Array):
     # 4 inputs (t, x, y, z)
     # 10 outputs for the symmetric metric components
     self.mlp = eqx.nn.MLP(
@@ -77,6 +77,9 @@ class MetricNN(eqx.Module):
         w_scaled = layer.weight.at[:, 1:].set(layer.weight[:, 1:] * omega_0)
 
         # Scale biases to ensure the high-frequency phase shifts correctly
+        # eqx.nn.Linear allows use_bias=False; the SIREN phase shift is not
+        # meaningful without one, so fail loudly rather than silently skip it.
+        assert layer.bias is not None, "SIREN first layer requires a bias"
         b_scaled = layer.bias * omega_0
 
         layer = eqx.tree_at(lambda _layer: _layer.weight, layer, w_scaled)

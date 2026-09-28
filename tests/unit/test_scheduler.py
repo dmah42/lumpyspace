@@ -201,8 +201,7 @@ def test_constraint_manager_action_and_lambda():
   assert manager.lambda_val == 60.0
 
   # Serialization round-trip
-  data = manager.to_dict()
-  restored = ConstraintManager.from_dict(data)
+  restored = ConstraintManager.from_state(manager.to_state())
   assert restored.lambda_val == 60.0
   assert restored.scheduler.w_penalty == 5.0
   assert restored.scheduler.ema_violation == manager.scheduler.ema_violation

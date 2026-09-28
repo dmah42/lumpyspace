@@ -39,6 +39,14 @@
 - **NEVER** blacklist, always denylist
 - **NEVER** whitelist, always allowlist
 
+## Comments and Prose
+
+- Comments and docstrings describe the **current state** of the code. **NEVER** reference what the code used to do, what was removed, or why a previous approach was wrong — that belongs in commit messages and design docs.
+- **NEVER** use contrastive framing: "it's not X, it's Y", "rather than", "instead of", "previously", "the old ...". State what is true directly.
+- Explaining a live constraint is fine (e.g. "diffrax does not export this symbol"). Narrating the decision that led to the code is not.
+- A comment must still make sense to someone who has never seen an earlier version of the file. If it only reads as a contrast with something that no longer exists, delete it.
+- This applies to chat responses as well as code.
+
 ## Commit Messages
 
 - **NEVER** use commit prefixes (e.g., `feat:`, `feat(...)`, `fix:`, `chore:`, `refactor:`, etc.).

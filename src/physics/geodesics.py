@@ -10,6 +10,12 @@ import diffrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
+
+# Mirrors diffrax's RealScalarLike, which is not exported from its public
+# API (it lives in the private diffrax._custom_types). Spelled out here
+# rather than imported from a private path that may move between versions.
+RealScalarLike = int | float | jnp.ndarray | np.ndarray
 
 # PHYSICAL SCALE:
 # PHYSICAL SCALE:
@@ -23,7 +29,9 @@ L_MAX = -10000.0 / L_UNIT
 
 
 def geodesic_system(
-  affine_param: jnp.ndarray, state: jnp.ndarray, args: tuple[Any, ...]
+  affine_param: RealScalarLike,
+  state: jnp.ndarray,
+  args: tuple[Any, ...],
 ) -> jnp.ndarray:
   """
   Defines the first-order ODE system for geodesics:
@@ -132,7 +140,7 @@ def _integrate_geodesic(
   metric_fn: Callable[[jnp.ndarray], jnp.ndarray],
   initial_state: jnp.ndarray,
   l_max: float,
-  z_limit: float,
+  z_limit: jnp.ndarray,
   should_log: bool = False,
 ) -> diffrax.Solution:
   # Pre-calculate Jacobian function once
@@ -232,6 +240,9 @@ def get_luminosity_distance(
 
   # Prevent JAX backward pass from evaluating 0.0 * Inf = NaN by masking inputs
   # first.
+  # diffrax types ys as optional (it is None when SaveAt requests nothing);
+  # we always pass SaveAt(ts=...), so this is an invariant, not a fallback.
+  assert sol.ys is not None
   is_finite_state = jnp.all(jnp.isfinite(sol.ys), axis=-1)
   safe_ys = jnp.where(is_finite_state[:, None], sol.ys, initial_state)
 
@@ -328,6 +339,7 @@ def get_bao_distances(
       r_prop = jnp.sqrt(jnp.sum(jnp.square(state[1:4])) + 1e-9)
       return z, r_prop
 
+    assert sol.ys is not None
     is_finite_state = jnp.all(jnp.isfinite(sol.ys), axis=-1)
     safe_ys = jnp.where(is_finite_state[:, None], sol.ys, initial_state)
     z_vals, dm_vals = jax.vmap(compute_z_dm)(safe_ys)
