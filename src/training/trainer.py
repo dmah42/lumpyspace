@@ -152,6 +152,7 @@ def train_model(
   # convergence, unlike a weight on a term with a nonzero floor.
   w_sn_cover: float = 2000.0,
   adaptive_check_interval: int = 1000,
+  best_warmup_steps: int = 1000,
   resume: bool = False,
   max_impulse_steps: int = 100,
 ) -> MetricNN:
@@ -476,8 +477,12 @@ def train_model(
       # illegal-shear cheat from the last post). l_wec/l_expand/l_shear/
       # l_spatial are hinge losses that are exactly 0.0 when compliant, so
       # gate on those and rank only by l_sn among steps that pass.
+      # A near-Minkowski metric satisfies every hinge and reaches no
+      # supernovae, scoring l_sn = 0.0 on an empty numerator. best_warmup_steps
+      # holds the gate shut until the geometry carries real structure.
       is_feasible = (
-        float(metrics[METRIC_WEC]) <= FEASIBILITY_EPS
+        current_step >= best_warmup_steps
+        and float(metrics[METRIC_WEC]) <= FEASIBILITY_EPS
         and float(metrics[METRIC_EXPAND]) <= FEASIBILITY_EPS
         and float(metrics[METRIC_SHEAR]) <= FEASIBILITY_EPS
         and float(metrics[METRIC_SPATIAL]) <= FEASIBILITY_EPS
