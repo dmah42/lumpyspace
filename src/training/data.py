@@ -128,11 +128,3 @@ def load_bao_data(
   cov_invs = jnp.linalg.inv(cov_array)
 
   return z, dm_obs, dh_obs, cov_invs
-
-
-def normalize_coordinates(z: jnp.ndarray) -> jnp.ndarray:
-  """
-  Normalizes redshift to training coordinate t.
-  """
-  a = 1 / (1 + z)
-  return (a * 5.0) - 4.0

@@ -205,6 +205,11 @@ def train_model(
     lambdas: dict[str, jnp.ndarray],
     w_penalties: dict[str, jnp.ndarray],
   ) -> tuple[MetricNN, optax.OptState, jnp.ndarray, dict[str, jnp.ndarray]]:
+    # Domain bounds follow a = 1/(1+z), t = 5a - 4, so t=1 is z=0 (today)
+    # and t=-4 is z~999 (recombination). That is why the CMB constraints sit
+    # at the far end. This mapping fixes where each constraint is applied;
+    # the network learns the metric freely within it.
+    #
     # We sample coordinates across the physical domain [-4.0, 1.0] in four
     # spans: Supernova data ([-2.5, 1.0]), inactive range ([-3.99, -2.5]),
     # spatial coordinates for the spatial weights ([-1.0, 1.0]), and the CMB
