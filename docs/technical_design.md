@@ -547,13 +547,16 @@ for shear.
     correct implication is that a _working_ SN channel should recover $H_0$
     from the data unaided — the 78x shortfall is evidence the channel is
     broken, not grounds for propping it up with a prior.
-  - **Success Criterion:** Apply **C + D** alone first, as a clean experiment
-    that tests whether the severed channel was the entire story. Diagnosis is
-    cheap: if `max_z_found` has not climbed off $2\times10^{-5}$ within a few
-    hundred steps, C+D is insufficient and **E** follows with clear rationale
-    rather than as a simultaneous confound. If it does climb, E becomes
-    optional cleanup rather than load-bearing, and **B′** is only warranted if
-    C+D+E still cannot escape the static basin.
+  - **Sequencing:** Apply **C + D** alone first, keeping the change minimal so
+    the coverage term can be observed in isolation. Two things come out of
+    that run: whether redshift climbs off $2\times10^{-5}$ at all, and a
+    `w_sn_cover` calibrated against a real $\chi^2$ distribution rather than
+    against numbers the defect produced. **E** follows afterwards regardless
+    of the outcome; running it concurrently would confound both. **B′** is
+    warranted only if C+D+E together cannot escape the static basin.
+  - **Success Criterion:** `l_sn_cover` falls to zero and stays there, with
+    `l_sn` reaching a reduced $\chi^2$ consistent with a genuine Pantheon+
+    fit, and $H(t{=}1)$ approaching $0.2335$ (H₀ = 70 in code units).
 
 ---
 
