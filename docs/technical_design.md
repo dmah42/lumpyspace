@@ -484,7 +484,7 @@ for shear.
     same training state.
 
 - **Task 4.12: Unreachable-Redshift Defect & Observational Channel Rebuild
-  [DEFECT — BLOCKING]**
+  [FUTURE]**
   - **Symptom (measured 2026-09-28, checkpoint at step ~10.6k):** null
     geodesics accumulate a total redshift of $z \approx 2\times10^{-5}$ over
     the _entire_ affine path (`sol.t1` reaches `L_MAX = -10` every time).
@@ -511,52 +511,83 @@ for shear.
     $l_{wec}$ ($R=0$), $l_{expand}$ ($H_i=0$), $l_{shear}$ ($\sigma^2=0$),
     $l_{spatial}$ (no gradients). Only the supernova term can push the metric
     off flat static space, and that channel was severed.
-  - **Remediation (sequenced deliberately — see Success Criterion):**
-    - **C. Reachability-honest SN loss.** Stop folding shortfall into the
-      returned distance. Compare model against observation only over the
-      $z$-range the ray actually covers; carry coverage as its own explicit,
-      separately-reported term. Removes the fungibility that let the two
-      failure modes trade off inside one scalar.
-    - **D. Coverage-term form.** A design detail _within_ C, not a separate
-      change. Prefer the trajectory endpoint redshift over `jnp.max`: the
-      current metric is non-monotonic (H_mean is negative today, so blueshift
-      segments are plausible) and `jnp.max` rewards a ray that redshifts
-      briefly then blueshifts back. Reserve "accumulate over all 50 saved
-      segments" as the thicker fallback if the endpoint form stalls.
-    - **E. Absolute density parameterization.** Replace the derived
-      `kappa_rho_0 = omega_m * 3 * h_mean**2` with a free absolute $\rho_0$
-      plus a baryonic floor. Flat static space with $\rho_0 > 0$ then yields
-      a nonzero EFE residual, so "there is matter here" becomes incompatible
-      with empty static space — a real expansion gradient. $\Omega_m$ becomes
-      a _derived, reported_ quantity rather than a knob clipped to
-      $[0.05, 0.3]$, which is strictly more tabula rasa than the status quo.
-    - **B′. Anisotropic time-symmetry breaking at init (optional).** Minkowski
-      is maximally symmetric (10-parameter isometry group) and is therefore
-      _not_ a neutral prior — it assumes perfect homogeneity, perfect isotropy
-      and staticity simultaneously. SIREN $\omega_0$ already addressed the
-      spatial half of this (see blog post 5); the temporal half was never
-      addressed. Seed the spatial components to grow in $t$ at _different,
-      randomly-drawn rates per axis_: that breaks staticity without assuming
-      FLRW, since expansion rate, history, anisotropy and any convergence
-      toward isotropy all remain learned. Explicitly **not** an FLRW
-      background or FLRW pretraining — both would bake in the homogeneity and
-      isotropy this project exists to interrogate, and would make Task 4.10's
-      initialization-echo ablation unanswerable.
-  - **Rejected:** anchoring $H_0$ via an explicit `(H(t=1) - H_0)^2` term.
-    Although `MU_SH0ES` carries an absolute scale from the Cepheid ladder, the
-    correct implication is that a _working_ SN channel should recover $H_0$
-    from the data unaided — the 78x shortfall is evidence the channel is
-    broken, not grounds for propping it up with a prior.
-  - **Sequencing:** Apply **C + D** alone first, keeping the change minimal so
-    the coverage term can be observed in isolation. Two things come out of
-    that run: whether redshift climbs off $2\times10^{-5}$ at all, and a
-    `w_sn_cover` calibrated against a real $\chi^2$ distribution rather than
-    against numbers the defect produced. **E** follows afterwards regardless
-    of the outcome; running it concurrently would confound both. **B′** is
-    warranted only if C+D+E together cannot escape the static basin.
-  - **Success Criterion:** `l_sn_cover` falls to zero and stays there, with
-    `l_sn` reaching a reduced $\chi^2$ consistent with a genuine Pantheon+
-    fit, and $H(t{=}1)$ approaching $0.2335$ (H₀ = 70 in code units).
+  - **Reachability-honest SN loss [COMPLETED].**
+    `get_luminosity_distance` returns `(dL, z_reached)` and invents nothing for
+    an unreachable target. `l_sn` is the $\chi^2$ over reachable supernovae
+    with a _fixed_ denominator of the full catalogue, so a badly-fitting
+    supernova cannot be shed by making it unreachable. `l_sn_cover` carries the
+    mean redshift shortfall as its own term. `z_reached` is the redshift at the
+    trajectory's last finite state, which denies a ray that redshifts briefly
+    and then blueshifts back. Directional ray-tracing (per-supernova RA/Dec,
+    with the null normalization generalized to include the $g_{0i}$ shift
+    terms) landed alongside it.
+  - **Outcome (measured 2026-10-01, step ~1.8k):** the channel reconnected.
+    `l_sn_cover` fell from $0.25$ to $8.6\times10^{-5}$; `l_sn` fell from the
+    fabricated $46$ to $0.538$. The supernova fit is now genuine. $H_{mean}$ at
+    $t=1$ sits at $\approx 0.002$ code units, under 1% of the observed $H_0$,
+    and $a_{mean}$ is flat across $t \in [-4, 1]$ — near-zero net volume
+    expansion from $z\approx999$ to today.
+  - **Consequent degeneracy:** redshift in a general metric has two sources,
+    metric expansion and the gravitational potential via $\sqrt{|g_{00}|}$. The
+    ray-tracer measures their sum and `l_sn` constrains their sum, so either
+    channel alone satisfies it. The model currently fits Pantheon+ almost
+    entirely through $\sqrt{|g_{00}|}$. This is the part-4 degeneracy in
+    sharper form: the geometry now fits the data, through the wrong mechanism.
+  - **Absolute density parameterization [FUTURE].** Replace the derived
+    `kappa_rho_0 = omega_m * 3 * h_mean**2` with a free absolute $\rho_0$
+    plus a baryonic floor. Flat static space with $\rho_0 > 0$ then yields
+    a nonzero EFE residual, so "there is matter here" becomes incompatible
+    with empty static space — a real expansion gradient. $\Omega_m$ becomes
+    a _derived, reported_ quantity rather than a knob clipped to
+    $[0.05, 0.3]$, which is strictly more tabula rasa than the status quo.
+    Directly targets the measured failure: with $h_{mean} \approx 0.002$,
+    $h_{mean}^2 \approx 4\times10^{-6}$ starves the density term, and a
+    universe with no matter in it has no reason to expand.
+  - **Present-day expansion band [FUTURE].** A two-sided hinge on
+    $H_{mean}$ at $t=1$ over $[60, 80]$ km s⁻¹ Mpc⁻¹, or $[0.200, 0.267]$ in
+    code units; exactly zero inside the band, so it joins the Augmented
+    Lagrangian set and the feasibility gate alongside the CMB priors.
+    `get_cosmology_today()` already computes the required quantity.
+    - **What it assumes.** The SH0ES value is a local distance ladder:
+      geometric anchors calibrate Cepheids, Cepheids calibrate Type Ia
+      absolute magnitudes, and $H_0$ is the velocity-distance slope over
+      $0.01 < z < 0.15$. Homogeneity enters only through peculiar-velocity
+      corrections and local density contrast, both bounded at the 1-2% level.
+      (The Planck $67.4$ is the model-dependent figure, inferred from the
+      sound horizon under $\Lambda$CDM.) A band also carries no information
+      the data lacks — the slope of $\mu(z)$ in Pantheon+ _is_ $H_0$, and the
+      model is already told 1701 times. It governs which channel carries it.
+    - **Why it concedes nothing under test.** This project asks whether
+      inhomogeneity can account for cosmic _acceleration_ without dark energy.
+      Expansion at roughly 70 km s⁻¹ Mpc⁻¹ is measured and was never the
+      contested claim; $\Lambda$ is. Note the asymmetry with the $\Omega_m$
+      clip that the absolute density parameterization removes: $\Omega_m$
+      constrains what the universe is made of, which is under test, where $H$
+      constrains how fast it expands, which is not.
+  - **Anisotropic time-symmetry breaking at init [FUTURE].** Minkowski
+    is maximally symmetric (10-parameter isometry group) and is therefore
+    _not_ a neutral prior — it assumes perfect homogeneity, perfect isotropy
+    and staticity simultaneously. SIREN $\omega_0$ already addressed the
+    spatial half of this (see blog post 5); the temporal half was never
+    addressed. Seed the spatial components to grow in $t$ at _different,
+    randomly-drawn rates per axis_: that breaks staticity without assuming
+    FLRW, since expansion rate, history, anisotropy and any convergence
+    toward isotropy all remain learned. Explicitly **not** an FLRW
+    background or FLRW pretraining — both would bake in the homogeneity and
+    isotropy this project exists to interrogate, and would make Task 4.10's
+    initialization-echo ablation unanswerable.
+  - **Sequencing:** the absolute density parameterization goes alone first,
+    keeping the change minimal so its effect on $H_{mean}$ can be observed in
+    isolation. It assumes strictly less than the expansion band does, so it
+    gets the first attempt: if decoupling the density from the expansion rate
+    is enough to lift $H$ into the observed range unaided, that is a materially
+    stronger result than clamping it there. The expansion band follows only if
+    $H_{mean}(t{=}1)$ is still outside it. Time-symmetry breaking at init is
+    warranted only if the two together cannot escape the static basin.
+  - **Success Criterion:** `l_sn` holds a reduced $\chi^2$ consistent with a
+    genuine Pantheon+ fit while `l_sn_cover` stays at zero, $H_{mean}(t{=}1)$
+    lands inside $[0.200, 0.267]$, and $\Omega_m$ is reported by the fit rather
+    than clipped.
 
 ---
 
