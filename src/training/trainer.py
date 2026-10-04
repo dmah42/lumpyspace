@@ -12,7 +12,12 @@ import jax.numpy as jnp
 import optax
 
 from src.core.metric import MetricNN
-from src.training.checkpoint import TrainingState, load_meta, save_meta
+from src.training.checkpoint import (
+  TrainingState,
+  load_best_feasible,
+  load_meta,
+  save_meta,
+)
 from src.training.constraints import ConstraintManager
 from src.training.loss import (
   CONSTRAINT_METRICS,
@@ -36,6 +41,7 @@ from src.training.loss import (
 from src.training.scheduler import (
   PenaltyAction,
   create_geometric_sgdr_schedule,
+  full_cycle_without_improvement,
 )
 
 START_W_PENALTY = 1.0
@@ -100,7 +106,6 @@ def save_checkpoint(
   model: eqx.Module,
   opt_state: optax.OptState,
   step: int,
-  best_loss: float,
   best_feasible_sn: float,
   constraints: dict[str, ConstraintManager],
 ) -> None:
@@ -110,7 +115,6 @@ def save_checkpoint(
   eqx.tree_serialise_leaves(path + ".opt", opt_state)
   state = TrainingState(
     step=step,
-    best_loss=best_loss,
     best_feasible_sn=best_feasible_sn,
     l_wec=constraints[METRIC_WEC].to_state(),
     l_expand=constraints[METRIC_EXPAND].to_state(),
@@ -135,7 +139,6 @@ def train_model(
   max_steps: int = 10000,
   learning_rate: float = 1e-4,
   target_loss: float = 1e-6,
-  patience: int = 500,
   kick_period_0: int = 500,
   kick_period_mult: float = 1.5,
   peak_learning_rate: float = 1e-3,
@@ -329,10 +332,9 @@ def train_model(
     return model, opt_state, loss, metrics
 
   # Training State for early stopping
-  best_loss = float("inf")
+  best_feasible_step: int | None = None
   best_feasible_sn = float("inf")
   start_step = 0
-  patience_counter = 0
 
   constraints = {
     METRIC_WEC: ConstraintManager(),
@@ -348,8 +350,9 @@ def train_model(
     state = load_meta(meta_path)
 
     start_step = state.step
-    best_loss = state.best_loss
-    best_feasible_sn = state.best_feasible_sn
+    best_feasible_step, best_feasible_sn = load_best_feasible(
+      checkpoint_path + ".meta"
+    )
 
     constraints[METRIC_WEC] = ConstraintManager.from_state(state.l_wec)
     constraints[METRIC_EXPAND] = ConstraintManager.from_state(state.l_expand)
@@ -366,6 +369,19 @@ def train_model(
     ) as penalty_writer_context,
   ):
     for i in range(max_steps):
+      current_step = start_step + i
+
+      # Stop once a full SGDR cycle has passed without a new best feasible
+      # step. Until the first feasible step, max_steps is the bound.
+      if best_feasible_step is not None and full_cycle_without_improvement(
+        current_step, best_feasible_step, kick_period_0, kick_period_mult
+      ):
+        print(
+          f"No new best feasible step since step {best_feasible_step}; "
+          f"stopping at step {current_step}."
+        )
+        break
+
       key, subkey = jax.random.split(key)
 
       lambdas = {}
@@ -392,7 +408,6 @@ def train_model(
       )
 
       current_loss = float(metrics[METRIC_LOSS])
-      current_step = start_step + i
 
       # Update Constraints
       for k in CONSTRAINT_METRICS:
@@ -444,7 +459,6 @@ def train_model(
             model,
             opt_state,
             current_step,
-            best_loss,
             best_feasible_sn,
             constraints,
           )
@@ -470,14 +484,7 @@ def train_model(
         )
         break
 
-      if current_loss < best_loss:
-        best_loss = current_loss
-        patience_counter = 0
-      else:
-        patience_counter += 1
-
-      # "Best" is saved separately from the patience/early-stopping signal
-      # above: total_loss is ~96% w_sn*l_sn, so tracking it alone would call
+      # total_loss is ~96% w_sn*l_sn, so ranking by it alone would call
       # a great-SN/physics-violating solution "best" (e.g. the pre-CMB-prior
       # illegal-shear cheat from the last post). l_wec/l_expand/l_shear/
       # l_spatial are hinge losses that are exactly 0.0 when compliant, so
@@ -495,6 +502,7 @@ def train_model(
       current_sn = float(metrics[METRIC_SN])
       if is_feasible and current_sn < best_feasible_sn:
         best_feasible_sn = current_sn
+        best_feasible_step = current_step
         if checkpoint_path:
           print(f"Saving best feasible model at step {current_step}...")
           save_checkpoint(
@@ -502,13 +510,8 @@ def train_model(
             model,
             opt_state,
             current_step,
-            best_loss,
             best_feasible_sn,
             constraints,
           )
-
-      if patience_counter >= patience:
-        print(f"Patience reached at step {current_step}.")
-        break
 
   return model

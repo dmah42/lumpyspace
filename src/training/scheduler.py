@@ -124,3 +124,41 @@ def create_geometric_sgdr_schedule(
     return learning_rate + (peak_learning_rate - learning_rate) * cosine_val
 
   return schedule
+
+
+def sgdr_cycle_index(
+  step: int, kick_period_0: int, kick_period_mult: float
+) -> int:
+  """
+  Returns the index of the SGDR cycle containing step, using the same
+  geometric cycle lengths as create_geometric_sgdr_schedule: cycle n starts
+  at T_0 * (M^n - 1) / (M - 1).
+  """
+  cycle = 0
+  cycle_length = float(kick_period_0)
+  cycle_end = cycle_length
+  while step >= cycle_end:
+    cycle += 1
+    cycle_length *= kick_period_mult
+    cycle_end += cycle_length
+  return cycle
+
+
+def full_cycle_without_improvement(
+  step: int,
+  last_improvement_step: int,
+  kick_period_0: int,
+  kick_period_mult: float,
+) -> bool:
+  """
+  True once step has entered the second SGDR cycle after the one containing
+  last_improvement_step, i.e. one complete cycle has passed with no
+  improvement. Counting in whole cycles means a run always reaches the
+  restart that follows its last improvement, and stops before starting the
+  next one.
+  """
+  improvement_cycle = sgdr_cycle_index(
+    last_improvement_step, kick_period_0, kick_period_mult
+  )
+  current_cycle = sgdr_cycle_index(step, kick_period_0, kick_period_mult)
+  return current_cycle >= improvement_cycle + 2

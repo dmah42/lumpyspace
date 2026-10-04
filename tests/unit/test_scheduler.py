@@ -5,6 +5,8 @@ from src.training.scheduler import (
   AdaptivePenaltyState,
   PenaltyAction,
   create_geometric_sgdr_schedule,
+  full_cycle_without_improvement,
+  sgdr_cycle_index,
 )
 
 
@@ -167,6 +169,77 @@ def test_geometric_sgdr_schedule_impulse_cap():
 
   # At step 140: stays flat at baseline (would still be decaying without cap)
   assert jnp.isclose(schedule(140), 1e-4)
+
+
+def test_sgdr_cycle_index_integer_boundaries():
+  # T_0 = 100, M = 2: cycles start at 0, 100, 300, 700.
+  for step, expected in [
+    (0, 0),
+    (99, 0),
+    (100, 1),
+    (299, 1),
+    (300, 2),
+    (699, 2),
+    (700, 3),
+  ]:
+    assert sgdr_cycle_index(step, 100, 2.0) == expected
+
+
+def test_sgdr_cycle_index_fractional_boundaries():
+  # T_0 = 500, M = 1.5: cycles start at 0, 500, 1250, 2375, 4062.5, 6593.75.
+  for step, expected in [
+    (499, 0),
+    (500, 1),
+    (1249, 1),
+    (1250, 2),
+    (2374, 2),
+    (2375, 3),
+    (4062, 3),
+    (4063, 4),
+    (6593, 4),
+    (6594, 5),
+  ]:
+    assert sgdr_cycle_index(step, 500, 1.5) == expected
+
+
+def test_sgdr_cycle_index_matches_schedule_restarts():
+  # The learning rate rises only at a restart, so the steps where the
+  # schedule increases must be exactly the steps where the cycle index
+  # increments. Uses the production kick parameters, whose cycle boundaries
+  # are fractional from the fourth restart onward.
+  schedule = create_geometric_sgdr_schedule(
+    learning_rate=1e-4,
+    peak_learning_rate=1e-3,
+    kick_period_0=500,
+    kick_period_mult=1.5,
+    max_impulse_steps=100,
+  )
+  steps = jnp.arange(11000)
+  lr = schedule(steps)
+  schedule_restarts = {int(s) for s in steps[1:][lr[1:] > lr[:-1]]}
+  index_restarts = {
+    s
+    for s in range(1, 11000)
+    if sgdr_cycle_index(s, 500, 1.5) > sgdr_cycle_index(s - 1, 500, 1.5)
+  }
+  assert index_restarts == {500, 1250, 2375, 4063, 6594, 10391}
+  assert schedule_restarts == index_restarts
+
+
+def test_full_cycle_without_improvement():
+  # T_0 = 500, M = 1.5. Improvement at 3002 is in cycle 3 (2375-4062).
+  # Cycle 4 (4063-6593) is the full cycle that must pass without improvement.
+  assert not full_cycle_without_improvement(3002, 3002, 500, 1.5)
+  assert not full_cycle_without_improvement(4062, 3002, 500, 1.5)
+  assert not full_cycle_without_improvement(6593, 3002, 500, 1.5)
+  assert full_cycle_without_improvement(6594, 3002, 500, 1.5)
+
+
+def test_full_cycle_without_improvement_late_in_cycle():
+  # An improvement just before a restart still earns the whole next cycle.
+  assert not full_cycle_without_improvement(4062, 4062, 500, 1.5)
+  assert not full_cycle_without_improvement(6593, 4062, 500, 1.5)
+  assert full_cycle_without_improvement(6594, 4062, 500, 1.5)
 
 
 def test_constraint_manager_action_and_lambda():
