@@ -1,5 +1,5 @@
 ---
-title: "lumpyspace part 5: symmetry breaking, and the data that never arrived"
+title: "lumpyspace part 5: lost in transit"
 date: 2026-10-16
 draft: false
 tags:
@@ -462,6 +462,14 @@ on $H$ removes the basin. Run both and the optimizer should have nowhere
 comfortable left to sit except a universe that contains matter and expands at
 the rate we observe.
 
+That also settles where the CMB constraints apply. By construction $t = -4$ is
+the big bang, and those constraints sit just after it, where the CMB was
+emitted. That only holds if the geometry honours the time coordinate, and this
+one does not: in the learned spacetime the $t = -4$ slice is larger than
+today's universe, and colder. The constraints are in the right place; the
+universe they constrain never expanded away from it. A universe that contains
+matter and expands is one where the geometry and the label agree.
+
 ### Holding the early universe to the CMB
 
 The CMB constraints sit at the start of time, and they exist to forbid exactly
@@ -484,15 +492,6 @@ The fix is to express them the way the CMB measures them: shear and
 contraction as fractions of the expansion rate, metric variation as a
 perturbation amplitude, tolerances at $10^{-5}$, and violations that stay large
 when they are large.
-
-There is a subtlety in where they apply, too. By construction $t = -4$ is the
-big bang, and the constraints sit just after it, where the CMB was emitted.
-That only holds if the geometry honours the time coordinate, and this one does
-not: in the learned spacetime the $t = -4$ slice is larger than today's
-universe, and colder. The constraints are in the right place; the universe they
-constrain never expanded away from it. That needs no change of its own. Making
-the universe actually expand, the first two changes above, is what brings the
-geometry and the label into agreement.
 
 Those are next.
 
