@@ -546,7 +546,8 @@ for shear.
   - **Present-day expansion band [FUTURE].** A two-sided hinge on
     $H_{mean}$ at $t=1$ over $[60, 80]$ km s⁻¹ Mpc⁻¹, or $[0.200, 0.267]$ in
     code units; exactly zero inside the band, so it joins the Augmented
-    Lagrangian set and the feasibility gate alongside the CMB priors.
+    Lagrangian set alongside the CMB priors and adds a term to the selection
+    objective (Task 4.13).
     `get_cosmology_today()` already computes the required quantity.
     - **What it assumes.** The SH0ES value is a local distance ladder:
       geometric anchors calibrate Cepheids, Cepheids calibrate Type Ia
@@ -576,7 +577,8 @@ for shear.
     background or FLRW pretraining — both would bake in the homogeneity and
     isotropy this project exists to interrogate, and would make Task 4.10's
     initialization-echo ablation unanswerable.
-  - **Sequencing:** the absolute density parameterization goes alone first,
+  - **Sequencing:** accuracy-normalised selection (Task 4.13) lands first.
+    Then the absolute density parameterization goes alone,
     keeping the change minimal so its effect on $H_{mean}$ can be observed in
     isolation. It assumes strictly less than the expansion band does, so it
     gets the first attempt: if decoupling the density from the expansion rate
@@ -588,6 +590,81 @@ for shear.
     genuine Pantheon+ fit while `l_sn_cover` stays at zero, $H_{mean}(t{=}1)$
     lands inside $[0.200, 0.267]$, and $\Omega_m$ is reported by the fit rather
     than clipped.
+
+- **Task 4.13: Accuracy-Normalised Best-Checkpoint Selection [FUTURE]**
+  - **Scope:** selection only. The training loss, its weights and the
+    Augmented Lagrangian are unchanged. This task decides which step is saved
+    as the best checkpoint, and therefore when the cycle-based stop rule
+    fires, since that rule keys off a new best.
+  - **Current selection and its problems:** the best checkpoint is the lowest
+    `l_sn` among steps where each of `l_wec`, `l_expand`, `l_shear` and
+    `l_spatial` is at most `FEASIBILITY_EPS = 0.5`.
+    - Physics enters only as pass/fail. `l_phys`, the field-equation residual,
+      plays no part in the choice.
+    - 0.5 was calibrated from observed loss values. In physical terms it
+      permits contraction rates up to 2-3x $H_0$, $\sigma^2$ up to ~0.71,
+      $\sum(\partial g)^2$ up to ~0.71, and mean negative $R$ about 10x the
+      real universe's $\kappa\rho_0 \approx 0.053$. Three of the four checks
+      never bind.
+    - Ranking by lowest `l_sn` below $\chi^2/N \approx 1$ rewards overfitting.
+      The step-3282 checkpoint of the current run sits at 0.46.
+  - **Selection objective:** one fixed scalar $S$, the sum of the terms
+    below. Each term is a mean over its sample points of a squared deviation
+    in units of that quantity's accuracy, so a term of order 1 means "as good
+    as the accuracy allows", exactly as $\chi^2/N$ does for the supernovae.
+    The best checkpoint is the lowest $S$, with no gate.
+
+    | term | quantity | accuracy |
+    | --- | --- | --- |
+    | SN fit | `l_sn` ($\chi^2/N$, fixed denominator) | Pantheon+ $\mu$ errors, already applied |
+    | SN coverage | per-SN shortfall $\max(0, z_i - z_{reached,i})$ | $\sigma_z \approx 10^{-3}$ (peculiar-velocity redshift scatter) |
+    | Shear | $\sigma/H$ at the CMB boundary | $10^{-5}$ (CMB quadrupole) |
+    | Expansion | $\max(0, -H_i)/H$ per axis at the CMB boundary | $10^{-5}$ (CMB) |
+    | Homogeneity | metric gradient amplitude $\sqrt{\sum(\partial_k g_{\mu\nu})^2}$ over the ~1 Gpc sample scale | $10^{-5}$ (Sachs-Wolfe, $\Phi \sim 10^{-5}$) |
+    | EFE | residual $\lvert G - \kappa T \rvert$ relative to the local matter term $\kappa\rho$ | $\sigma_{EFE}$, open decision |
+    | WEC | $\max(0, -R)$ relative to $\kappa\rho$ | $\sigma_{WEC}$, open decision |
+
+  - **Open decision:** the EFE and WEC have no measured accuracy, because
+    they are theoretical conditions. Their $\sigma$ states how precisely the
+    model must balance the matter it describes, and has to be chosen and
+    recorded explicitly. A relative $10^{-2}$ ("the field equations hold to 1%
+    of the matter term") is a reasonable starting point.
+  - **Vanishing scales:** $H$ and $\kappa\rho$ go to zero on flat static
+    space, so each ratio needs the same small-denominator guard style as
+    `get_efe_loss`. With that guard, Minkowski scores zero on every physics
+    term, which is correct: it is vacuum, isotropic, homogeneous and not
+    contracting. Only the SN coverage term excludes it, as in the
+    loss. `best_warmup_steps` keeps the near-Minkowski opening steps out of
+    selection.
+  - **Expected consequence:** the CMB terms dominate $S$ wherever the
+    geometry violates them. The current run's boundary sits at
+    $\sigma/H \approx 2$, a shear term of order $10^{10}$, so selection there
+    reduces in practice to "least CMB violation" until that violation comes
+    within range. That is the intended behaviour: violations count in
+    proportion to how precisely they are measured.
+  - **Implementation:**
+    - The step function returns the per-term quantities as auxiliary
+      outputs. No gradient flows through them, so optimisation is untouched.
+    - $S$ is a column in `training_metrics.csv`, written every logged step,
+      and the monitoring notebook plots it alongside the loss chart. $S$ and
+      its per-term breakdown are printed on each new best and stored in the
+      best checkpoint's `.meta`.
+    - Resume reads the best $S$ and its step from the best checkpoint's
+      `.meta` when it exists.
+    - Lands with a fresh run, so the `.meta` schema cleanup goes with it and
+      needs no migration: every field describes its own checkpoint (`step`,
+      `l_sn`, $S$ and its terms), and the Augmented Lagrangian states sit
+      under `constraints` keyed `wec`, `expand`, `shear`, `spatial`.
+  - **Tests:** each term against metrics with known values (an FLRW metric
+    scores zero shear and zero contraction; a Kasner-like anisotropic metric
+    has an analytic $\sigma/H$); selection prefers lower $S$ regardless of
+    which terms differ; resume restores the best $S$ and step.
+  - **Sequencing:** lands before the absolute density parameterization and
+    the expansion band (Task 4.12), so every run that tests those is judged
+    by $S$.
+  - **Success Criterion:** the best checkpoint is the step with the lowest
+    $S$, and its per-term breakdown states in accuracy units how far the
+    geometry sits from the supernova data and from each physical condition.
 
 ---
 
