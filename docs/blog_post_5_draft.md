@@ -1,7 +1,7 @@
 ---
 title: "lumpyspace part 5: symmetry breaking, and the data that never arrived"
-date: TBD
-draft: true
+date: 2026-10-16
+draft: false
 tags:
   [
     "machine learning",
