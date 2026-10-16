@@ -187,8 +187,8 @@ sixty times beyond reach. **One hundred percent of Pantheon+ was unreachable.**
 So what had `get_luminosity_distance` been returning for four months?
 
 When the integration cannot reach the target, `jnp.interp` clamps to the end of
-the trajectory, and a penalty I had written as an "optimizer compass" gets
-added on top to encourage expansion:
+the trajectory, and a shortfall penalty I had added to push the optimizer
+toward expansion gets added on top:
 
 ```python
 penalty = jnp.where(max_z_found < z_target, 10 * (z_target - max_z_found), 0.0)
@@ -305,76 +305,86 @@ briefly and then blueshifts back.
 
 ## Results
 
-<!-- PLACEHOLDER: regenerate every figure from the repaired run.
-     Target ~10k steps unless patience triggers first. -->
-
 The channel reconnected immediately. The mean redshift shortfall collapsed from
 $0.25$ — effectively the mean redshift of the catalogue, since nothing was
 reachable — through $9\times10^{-2}$, $1.7\times10^{-2}$, $8.4\times10^{-3}$,
-to around $3\times10^{-3}$ inside a few hundred steps. The supernova
-chi-squared fell alongside it, from the fabricated $46$ to $\approx 1.6$ per
-supernova.
+$3\times10^{-3}$, and kept going. By step $1870$ it was touching exactly zero.
+The supernova chi-squared fell alongside it, from the fabricated $29$–$86$ range
+to under $0.5$ per supernova.
 
-![Loss over time](PLACEHOLDER_lumpyspace5_loss.png)
+![Loss over time](lumpyspace5_loss.png)
 
-<!-- PLACEHOLDER: total loss, residual breakdown including l_sn_cover,
-     and Omega_m. -->
+The end of the chart is the run breaking down. As the penalties kept
+escalating, the fit fell apart from step $11{,}500$, and at step $15{,}390$ a
+single ray failed in the ODE solver and stopped the run.
 
-### The abandoned tail
+$\Omega_m$ went the other way from the earlier runs: after a brief dip it hit
+its $0.3$ ceiling around step $2200$ and stayed there for the rest of the run.
 
-`l_sn_cover` then stopped falling and began oscillating around
-$3\times10^{-3}$. Because it is a mean over the full catalogue, that number
-inverts to a horizon: find $h$ such that
-$\sum_{z_i > h}(z_i - h) = 1701 \times 3\times10^{-3}$.
+### Reaching the whole catalogue
 
-The model reaches $z \approx 1.22$. Nineteen supernovae — the entire $z > 1.23$
-tail, $1.1\%$ of the catalogue — sit permanently beyond it, and every unit of
-shortfall lives there.
+`l_sn_cover` first reads exactly $0$ at step $1870$. Until the run broke down,
+it was exactly zero on just over half of all logged steps. On those steps every
+ray in the catalogue reaches its source, out to the most distant supernova at
+$z = 2.26$. Between them the shortfall is mostly below $10^{-4}$, the last
+handful of supernovae crossing in and out of reach as the geometry churns. It
+spikes when the geometry is disturbed: the largest before step $11{,}000$,
+$4\times10^{-3}$ at step $2140$, is still only a sixtieth of where it started.
 
-Abandoning them is rational. The coverage penalty is linear in shortfall, so
-the most distant supernova is always the cheapest thing to give up. Reaching
-$z = 2.26$ means extending the horizon by a further $1.04$ in redshift, an
-enormous change to the geometry, while leaving it out costs a fraction of the
-loss. So the optimizer parks the tail and polishes the 1682 supernovae it can
-already see, which is exactly what a falling `l_sn` beside a flat `l_sn_cover`
-describes.
+The coverage weight is what pins it there. At $w_{\text{sn\_cover}} = 2000$, a
+mean shortfall of even $3\times10^{-3}$ costs $6.0$, which makes it the largest
+single term in the objective. Combined with the fixed $\chi^2$ denominator,
+which keeps an unreachable supernova counting against the fit, there is no
+cheap way to give up the far tail.
 
-The horizon settles at $z \approx 1.22$. The 99th percentile of Pantheon+ is
-$z = 1.236$. The model reaches precisely as far as the data is dense, and
-stops.
+The supernova fit settles at a reduced $\chi^2$ of $0.436$ at its best. That is
+below $1$, which means the residuals are smaller than the Pantheon+ error bars
+would lead you to expect: a flexible network fitting 1701 points, conservative
+quoted uncertainties, or some of both.
 
-![Directional expansion rates and shear](PLACEHOLDER_lumpyspace5_hubble_shear.png)
+### Fitting through the wrong door
 
-<!-- PLACEHOLDER: H(t) and shear. The question that matters is whether
-     H_mean(t=1) approaches 0.2435 (H_0 = 73 in code units) or stays orders
-     of magnitude below it. -->
+![Expansion rates, scale factors and shear along the observer's line](lumpyspace5_hubble_shear.png)
 
-![Curvature and shear](PLACEHOLDER_lumpyspace5_ricci_shear_2d.png)
+The fit is genuine, and expansion plays almost no part in it. Along the
+observer's line the mean expansion rate is negative across the entire history,
+today included: about $-0.0025$ at $t = 1$, where $H_0$ is $0.2435$. The model
+universe is contracting now. The deep past contracts hardest, bottoming out
+around $t \approx -2.8$, and over the whole history the mean scale factor
+shrinks by $17\%$. Every bit of the supernova redshift has to come from
+$\sqrt{|g_{00}|}$.
 
-<!-- PLACEHOLDER: 2D curvature and shear across the principal planes, plus
-     the spatial weight maps. No pre-repair figures exist to compare
-     against, so describe the structure on its own terms rather than as a
-     before/after. -->
+![Contraction, shear and curvature at t = -3](lumpyspace5_maps_t-3.png)
+
+![Contraction, shear and curvature today](lumpyspace5_maps_t1.png)
+
+The maps across space show how. At $t = -3$ the contraction is a single region
+centred on the observer. By today it has moved out to the edges of the box,
+and at the observer sits a lump of positive curvature, $R \approx 7$, about
+$0.3$ across. For pressureless matter $R = \kappa\rho$, and the model's
+$\kappa\rho$ is around $10^{-5}$, so nothing sources the lump: the field
+equations are not balanced there. It is small enough that the randomly sampled
+field-equation loss rarely lands in it. It also sits exactly where every ray
+starts, which makes it the obvious place for $\sqrt{|g_{00}|}$ to be doing the
+work.
 
 ## What this cost, and what it bought
 
-<!-- PLACEHOLDER: conclusion, pending the full run at ~10k steps.
+For four months the supernova data never reached the model. The figures and
+numbers in parts 3 and 4 were produced under that broken channel and should be
+read accordingly.
 
-     The shape depends on what H_mean does:
+With the channel repaired, every supernova in Pantheon+ is reached and the fit
+is genuine. It is also a fit through the wrong door: a universe that contracts
+today, gets its redshift from an unsourced lump of curvature around the
+observer, and breaks the CMB's isotropy by orders of magnitude. The CMB
+penalties that should have caught it were measuring the wrong things.
 
-     - If H_mean(t=1) climbs toward 0.2435 with a sane expansion history,
-       this is the first run where the model has genuinely fitted Pantheon+
-       under General Relativity, and the lumpiness question can finally be
-       asked honestly.
-     - If H stays orders of magnitude low while chi-squared looks healthy,
-       something other than expansion is sourcing the fit, and that needs
-       chasing before any cosmological claim gets made.
+## Next
 
-     Either way: state plainly that the figures and numbers in parts 3 and 4
-     were produced under the broken channel and should be read accordingly.
--->
+Three changes come out of this run.
 
-## Next: matter that can push back
+### Matter that can push back
 
 One thread from the Minkowski table is worth pulling.
 
@@ -392,7 +402,99 @@ $\Omega_m$ then becomes a quantity the fit _reports_ rather than a tuning knob
 clipped to $[0.05, 0.3]$; considerably more tabula rasa than where this project
 currently stands.
 
-That is the next post.
+### Where the redshift comes from
+
+There is a second thread, and it runs the opposite way.
+
+A healthy `l_sn` says the model reproduces the observed distance-redshift
+relation. It says nothing about the mechanism. Redshift in a general metric has
+two sources: the expansion of space, and the gravitational potential through
+$\sqrt{|g_{00}|}$. The ray-tracer measures their sum, and the supernova loss
+constrains their sum. Either one on its own can satisfy it.
+
+So the model can fit Pantheon+ with $H_{\text{mean}}$ two orders of magnitude
+below $H_0$, or even below zero, provided $\sqrt{|g_{00}|}$ carries the load.
+That is a degenerate basin, and nothing currently in the objective excludes it. It is the part-4
+degeneracy again, in a sharper form: back then the supernova channel was broken
+and the geometry was unconstrained. Now the channel works, the geometry fits,
+and it fits through the wrong door.
+
+The constraint that closes it is a band on $H_{\text{mean}}$ at $t=1$: 60 to 80
+km s⁻¹ Mpc⁻¹, or $[0.200, 0.267]$ in code units. A two-sided hinge, exactly zero
+inside the band, joining the existing Augmented Lagrangian set.
+
+Adding an observational band to a project whose entire premise is assuming
+nothing deserves some scrutiny, so it is worth being precise about what we're
+assuming.
+
+The SH0ES value is a local distance ladder. Geometric anchors (parallaxes, the
+NGC 4258 maser, detached eclipsing binaries in the LMC) calibrate Cepheids,
+Cepheids calibrate Type Ia absolute magnitudes, and $H_0$ is the slope of
+velocity against distance for supernovae between $z = 0.01$ and $z = 0.15$.
+Distances come from stellar physics and geometry. Redshifts come from
+spectroscopy. Homogeneity enters through the peculiar-velocity corrections and
+the local density contrast, both bounded at the one-to-two percent level. The
+Planck figure of $67.4$ is a model-dependent one, inferred from the sound
+horizon under full $\Lambda$CDM.
+
+The band also adds no information the data does not already carry. The slope of
+$\mu(z)$ in Pantheon+ **is** $H_0$. The model is already being told, 1701 times
+over. What the band changes is which channel is permitted to carry the message.
+
+And there is a cleaner way to see why this concedes nothing. The question here
+is whether inhomogeneity can account for cosmic **acceleration** without dark
+energy. Whether the universe expands at roughly 70 km s⁻¹ Mpc⁻¹ was never the
+contested part, $\Lambda$ is. Pinning the expansion rate gives up nothing that
+was under test, and frees the optimizer to work on the part that is.
+
+Which does leave an obvious tension: one of these changes removes a clamp and
+the other adds one. The balance is that clipping $\Omega_m$ constrains what the
+universe is **made of**, which is precisely the thing this project set out to
+interrogate. A band on $H$ constrains how fast it **expands**, which has been
+measured directly and was never in dispute. Ideally we would have found a
+solution from which the measured $H_0$ would align with observation, but that's
+apparently an expensive solution!
+
+The two meet in the same place regardless. $\kappa\rho_0 = \Omega_m \cdot 3H^2$
+means a collapsed $H$ starves the matter density, and a universe with no matter
+in it has no reason to expand. An absolute $\rho_0$ breaks the coupling; a band
+on $H$ removes the basin. Run both and the optimizer should have nowhere
+comfortable left to sit except a universe that contains matter and expands at
+the rate we observe.
+
+### Holding the early universe to the CMB
+
+The CMB constraints sit at the start of time, and they exist to forbid exactly
+the early universe this run built. Through the deep past the region around the
+observer contracts on every axis, and at the boundary the shear runs from about
+twice the expansion rate early in the run to about two-thirds of it in the
+geometry shown above. The CMB holds that ratio below $10^{-5}$.
+
+They were slow to push back, for three reasons. Their tolerances are absolute
+numbers in code units, so they do not scale with the expansion rate the shear
+is supposed to be measured against. The losses square the violation, which
+crushes a miss of $10^{-3}$ down to $10^{-6}$, too small to produce much
+gradient. And the adaptive penalty weights only escalate on a schedule: the
+expansion weight was raised five-fold at each check while the contraction kept
+growing, and it took until step $7000$, at a weight of $15{,}625$, before the
+contraction started to give way. The expansion loss then fell by about
+$60\%$, while the supernova fit got worse.
+
+The fix is to express them the way the CMB measures them: shear and
+contraction as fractions of the expansion rate, metric variation as a
+perturbation amplitude, tolerances at $10^{-5}$, and violations that stay large
+when they are large.
+
+There is a subtlety in where they apply, too. By construction $t = -4$ is the
+big bang, and the constraints sit just after it, where the CMB was emitted.
+That only holds if the geometry honours the time coordinate, and this one does
+not: in the learned spacetime the $t = -4$ slice is larger than today's
+universe, and colder. The constraints are in the right place; the universe they
+constrain never expanded away from it. That needs no change of its own. Making
+the universe actually expand, the first two changes above, is what brings the
+geometry and the label into agreement.
+
+Those are next.
 
 [^0]: or $t=0$ i suppose.
-[^1]: [_A Comprehensive Measurement of the Local Value of the Hubble Constant with 1 km $text{s}^-1$ $text{Mpc}^-1$ Uncertainty from the Hubble Space Telescope and the SH0ES Team_](https://arxiv.org/abs/2112.04510)
+[^1]: [_A Comprehensive Measurement of the Local Value of the Hubble Constant with 1 km s$^{-1}$ Mpc$^{-1}$ Uncertainty from the Hubble Space Telescope and the SH0ES Team_](https://arxiv.org/abs/2112.04510)
