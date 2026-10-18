@@ -3,10 +3,12 @@ Loss functions for the FLRW control baseline.
 """
 
 from collections.abc import Callable
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 
+from src.core.kinematics import comoving_kinematics
 from src.core.metric import MetricNN
 from src.core.tensors import get_ricci_tensor
 from src.physics.geodesics import get_bao_distances, get_luminosity_distance
@@ -33,17 +35,31 @@ def apply_spatial_weight(loss_val: jnp.ndarray, w: jnp.ndarray) -> jnp.ndarray:
   return 0.5 * jnp.exp(-2.0 * w) * loss_val + w
 
 
+class EfeDiagnostics(NamedTuple):
+  """Per-point field-equation quantities for the selection score."""
+
+  # Mean square of G^mu_nu - kappa T^mu_nu, without the volume weighting the
+  # loss applies.
+  residual_sq: jnp.ndarray
+  # Local matter term kappa * rho.
+  kappa_rho: jnp.ndarray
+  ricci_scalar: jnp.ndarray
+
+
 def get_efe_loss(
   model: MetricNN,
   coords: jnp.ndarray,
   kappa_rho_0: float,
-) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, EfeDiagnostics]:
   """
   Computes the residual of the Einstein Field Equations:
   G_mu_nu - 8*pi*G * T_mu_nu = 0
 
   For the FLRW control, we assume a vacuum or perfect fluid.
   Here we minimize the Einstein Tensor residual directly.
+
+  Returns (raw_residual_loss, wec_penalty_raw, w_4d, diagnostics), where
+  diagnostics feeds the selection score and plays no part in the loss.
   """
   g = model(coords)
   g_inv = jnp.linalg.inv(g)
@@ -80,7 +96,8 @@ def get_efe_loss(
   t_mixed = t_mixed.at[0, 1:4].set(current_density * g[0, 1:4] / neg_g00)
 
   # Physics Residual (G^m_n - 8*pi*G * T^m_n = 0)
-  residual = (g_mixed - t_mixed) * gamma
+  unweighted_residual = g_mixed - t_mixed
+  residual = unweighted_residual * gamma
 
   # Evaluate spatial weight
   w_4d = model.get_spatial_weight(coords)[0]
@@ -91,7 +108,12 @@ def get_efe_loss(
   # Enforce the Weak Energy Condition by penalizing negative Ricci scalar
   wec_penalty_raw = jnp.maximum(0.0, -r_scalar)
 
-  return raw_residual_loss, wec_penalty_raw, w_4d
+  diagnostics = EfeDiagnostics(
+    residual_sq=jnp.mean(jnp.square(unweighted_residual)),
+    kappa_rho=current_density,
+    ricci_scalar=r_scalar,
+  )
+  return raw_residual_loss, wec_penalty_raw, w_4d, diagnostics
 
 
 def get_data_loss(
@@ -100,13 +122,13 @@ def get_data_loss(
   target_mu: jnp.ndarray,
   mu_err: jnp.ndarray,
   directions: jnp.ndarray,
-) -> tuple[jnp.ndarray, jnp.ndarray]:
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
   """
   Data loss against Supernova distance modulus.
   dL is computed via the geodesic ray-tracer along each source's own sky
   direction. mu = 5 * log10(dL_mpc) + 25
 
-  Returns (l_sn, l_sn_cover):
+  Returns (l_sn, l_sn_cover, cover_sq):
     l_sn:       weighted chi-squared. Unreachable supernovae contribute zero
                 to the numerator but STILL COUNT in the denominator - with a
                 moving denominator the model could shed a badly-fit source by
@@ -114,6 +136,8 @@ def get_data_loss(
                 the old compass had.
     l_sn_cover: mean redshift shortfall over all supernovae. A hinge, so it
                 is exactly zero once every ray reaches its source.
+    cover_sq:   mean squared shortfall, for the selection score. Plays no part
+                in the loss.
 
   These are kept separate on purpose. Folding shortfall into the returned
   distance (the old "Optimizer Compass") made the two failure modes fungible
@@ -139,9 +163,11 @@ def get_data_loss(
   chi2 = jnp.square((mu_pred - target_mu) / mu_err)
 
   l_sn = jnp.sum(jnp.where(reached, chi2, 0.0)) / len(redshifts)
-  l_sn_cover = jnp.mean(jnp.maximum(0.0, redshifts - z_reached))
+  shortfall = jnp.maximum(0.0, redshifts - z_reached)
+  l_sn_cover = jnp.mean(shortfall)
+  cover_sq = jnp.mean(jnp.square(shortfall))
 
-  return l_sn, l_sn_cover
+  return l_sn, l_sn_cover, cover_sq
 
 
 def get_bao_loss(
@@ -198,42 +224,20 @@ def get_cmb_loss(
   Expansion, Shear (Isotropy), and Spatial Homogeneity.
   Returns raw loss values before Augmented Lagrangian weighting.
   """
-  # Extract metric and spatial metric
   g = model(coords)
-  g_spatial = g[1:4, 1:4]
-  g_spatial_inv = jnp.linalg.inv(g_spatial)
-
-  # Lapse function N = sqrt(-g_00)
-  lapse = jnp.sqrt(-g[0, 0])
 
   # Compute Jacobian to get time and spatial derivatives
   # shape of jac_g: (4, 4, 4) -> (mu, nu, k) where k is the derivative index
   jac_g = jax.jacfwd(model)(coords)
 
-  # Time derivative of spatial metric (dot_g_ij)
-  # index 0 is time 't'
-  dot_g_spatial = jac_g[1:4, 1:4, 0]
-
-  # Extrinsic curvature K_ij = -1/(2N) * dot_g_ij
-  k_ij = -1.0 / (2.0 * lapse) * dot_g_spatial
+  # Expansion and shear of the comoving matter, including the shift terms.
+  kinematics = comoving_kinematics(g, jac_g)
 
   # 1. Expansion Penalty: Enforce expansion (no contraction) on all three axes
-  # H_i = -K^i_i (diagonal of K_mixed).
-  # Computed efficiently to avoid full matmul.
-  h_dir = -jnp.sum(g_spatial_inv * jnp.transpose(k_ij), axis=-1)
-  l_expand = jnp.sum(jnp.maximum(0.0, -h_dir) ** 2)
+  l_expand = jnp.sum(jnp.maximum(0.0, -kinematics.h_dir) ** 2)
 
   # 2. Shear Penalty: max(0, sigma^2 - 1e-5)^2
-  # sigma_ij = K_ij - 1/3 * Tr(K) * g_ij
-  # Tr(K) is exactly -sum(h_dir)
-  sigma_ij = k_ij + 1.0 / 3.0 * jnp.sum(h_dir) * g_spatial
-
-  # sigma^2 = 1/2 * sigma_ij * g^{ia} g^{jb} sigma_ab
-  # which is 1/2 * Tr( (g_spatial_inv @ sigma_ij)^2 )
-  sigma_mixed = jnp.matmul(g_spatial_inv, sigma_ij)
-  # Optimize Tr(A @ A) -> sum(A * A.T) to save a matmul
-  sigma_sq = 0.5 * jnp.sum(sigma_mixed * jnp.transpose(sigma_mixed))
-  l_shear = jnp.maximum(0.0, sigma_sq - 1e-5) ** 2
+  l_shear = jnp.maximum(0.0, kinematics.sigma_sq - 1e-5) ** 2
 
   # 3. Spatial Homogeneity Penalty
   # sum over spatial derivatives (k=1,2,3) and all metric components

@@ -3,24 +3,31 @@ import json
 import os
 
 from src.training.constraints import ConstraintState
-from src.training.loss import (
-  METRIC_EXPAND,
-  METRIC_SHEAR,
-  METRIC_SPATIAL,
-  METRIC_WEC,
-)
+from src.training.selection import SCORE_TERMS
+
+
+@dataclasses.dataclass
+class ConstraintStates:
+  """Augmented Lagrangian state for each constraint."""
+
+  wec: ConstraintState
+  expand: ConstraintState
+  shear: ConstraintState
+  spatial: ConstraintState
 
 
 @dataclasses.dataclass
 class TrainingState:
-  """Training state required to resume a run."""
+  """
+  State of one checkpoint: what a run needs to resume from it, and the scores
+  of the step it was taken at.
+  """
 
   step: int
-  best_feasible_sn: float
-  l_wec: ConstraintState
-  l_expand: ConstraintState
-  l_shear: ConstraintState
-  l_spatial: ConstraintState
+  l_sn: float
+  score: float
+  score_terms: dict[str, float]
+  constraints: ConstraintStates
 
 
 def save_meta(meta_path: str, state: TrainingState) -> None:
@@ -29,6 +36,26 @@ def save_meta(meta_path: str, state: TrainingState) -> None:
   """
   with open(meta_path, "w") as meta_f:
     json.dump(dataclasses.asdict(state), meta_f, indent=2)
+
+
+def _require(data: dict, keys: set[str], what: str) -> None:
+  missing = keys - set(data.keys())
+  if missing:
+    raise ValueError(f"Invalid .meta file. Missing {what} keys: {missing}")
+
+
+def _parse_constraint(c_data: dict) -> ConstraintState:
+  _require(
+    c_data,
+    {"lambda_val", "w_penalty", "ema_violation", "last_check_violation"},
+    "constraint",
+  )
+  return ConstraintState(
+    lambda_val=float(c_data["lambda_val"]),
+    w_penalty=float(c_data["w_penalty"]),
+    ema_violation=float(c_data["ema_violation"]),
+    last_check_violation=float(c_data["last_check_violation"]),
+  )
 
 
 def load_meta(meta_path: str) -> TrainingState:
@@ -49,54 +76,35 @@ def load_meta(meta_path: str) -> TrainingState:
   except json.JSONDecodeError as e:
     raise ValueError("Incompatible .meta JSON file") from e
 
-  required_keys = {
-    "step",
-    "best_feasible_sn",
-    METRIC_WEC,
-    METRIC_EXPAND,
-    METRIC_SHEAR,
-    METRIC_SPATIAL,
-  }
+  _require(
+    data, {"step", "l_sn", "score", "score_terms", "constraints"}, "required"
+  )
+  _require(data["score_terms"], set(SCORE_TERMS), "score term")
+  _require(
+    data["constraints"], {"wec", "expand", "shear", "spatial"}, "constraint"
+  )
 
-  missing_keys = required_keys - set(data.keys())
-  if missing_keys:
-    raise ValueError(
-      f"Invalid .meta file. Missing required keys: {missing_keys}"
-    )
-
-  def parse_constraint(c_data: dict) -> ConstraintState:
-    req_c_keys = {
-      "lambda_val",
-      "w_penalty",
-      "ema_violation",
-      "last_check_violation",
-    }
-    missing_c_keys = req_c_keys - set(c_data.keys())
-    if missing_c_keys:
-      raise ValueError(f"Missing constraint keys: {missing_c_keys}")
-    return ConstraintState(
-      lambda_val=float(c_data["lambda_val"]),
-      w_penalty=float(c_data["w_penalty"]),
-      ema_violation=float(c_data["ema_violation"]),
-      last_check_violation=float(c_data["last_check_violation"]),
-    )
-
+  constraints = data["constraints"]
   return TrainingState(
     step=int(data["step"]),
-    best_feasible_sn=float(data["best_feasible_sn"]),
-    l_wec=parse_constraint(data[METRIC_WEC]),
-    l_expand=parse_constraint(data[METRIC_EXPAND]),
-    l_shear=parse_constraint(data[METRIC_SHEAR]),
-    l_spatial=parse_constraint(data[METRIC_SPATIAL]),
+    l_sn=float(data["l_sn"]),
+    score=float(data["score"]),
+    score_terms={k: float(data["score_terms"][k]) for k in SCORE_TERMS},
+    constraints=ConstraintStates(
+      wec=_parse_constraint(constraints["wec"]),
+      expand=_parse_constraint(constraints["expand"]),
+      shear=_parse_constraint(constraints["shear"]),
+      spatial=_parse_constraint(constraints["spatial"]),
+    ),
   )
 
 
-def load_best_feasible(meta_path: str) -> tuple[int | None, float]:
+def load_best(meta_path: str) -> tuple[int | None, float]:
   """
-  Returns (step, best_feasible_sn) from the best feasible checkpoint's .meta
-  file, or (None, inf) when no feasible step has been saved yet.
+  Returns (step, score) from the best checkpoint's .meta file, or (None, inf)
+  when no best checkpoint has been saved yet.
   """
   if not os.path.exists(meta_path):
     return None, float("inf")
   state = load_meta(meta_path)
-  return state.step, state.best_feasible_sn
+  return state.step, state.score

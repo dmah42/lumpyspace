@@ -85,7 +85,7 @@ def test_efe_loss_minkowski():
   coords = jnp.array([0.5, 0.0, 0.0, 0.0])
 
   kappa_rho_0_arr, _ = metric_fn.get_cosmology_today()
-  efe_loss, wec_penalty, w_4d = get_efe_loss(
+  efe_loss, wec_penalty, w_4d, diagnostics = get_efe_loss(
     metric_fn, coords, kappa_rho_0_arr[0]
   )
 
@@ -95,6 +95,11 @@ def test_efe_loss_minkowski():
   # and WEC is 0.
   assert jnp.allclose(efe_loss, 0.0, atol=1e-6)
   assert jnp.allclose(wec_penalty, 0.0, atol=1e-6)
+  # The selection-score diagnostics see the same vacuum: no residual, no
+  # matter, no curvature.
+  assert jnp.allclose(diagnostics.residual_sq, 0.0, atol=1e-6)
+  assert jnp.allclose(diagnostics.kappa_rho, 0.0, atol=1e-6)
+  assert jnp.allclose(diagnostics.ricci_scalar, 0.0, atol=1e-6)
 
 
 def test_data_loss_computation():
@@ -119,7 +124,7 @@ def test_data_loss_computation():
   # distances must not depend on which way the ray is fired.
   directions = jnp.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
 
-  loss, cover = get_data_loss(
+  loss, cover, cover_sq = get_data_loss(
     flrw_metric, z_vals, target_mu, mu_err, directions
   )
 
@@ -132,6 +137,7 @@ def test_data_loss_computation():
   # This expanding FLRW metric should actually reach both targets, so the
   # coverage hinge must be exactly zero and the fit term strictly positive.
   assert cover == 0.0, f"Expected full coverage, got shortfall {cover}"
+  assert cover_sq == 0.0, f"Expected full coverage, got {cover_sq}"
   assert loss > 0.0, "Data loss should be strictly positive."
 
 
@@ -207,7 +213,7 @@ def test_efe_loss_negative_curvature(monkeypatch):
   coords = jnp.array([1.0, 0.0, 0.0, 0.0])
   kappa_rho_0 = 0.1
 
-  _, wec_penalty, _ = get_efe_loss(metric_fn, coords, kappa_rho_0)
+  _, wec_penalty, _, _ = get_efe_loss(metric_fn, coords, kappa_rho_0)
 
   # For R = -2.0, the linear penalty raw is 2.0.
   assert jnp.allclose(wec_penalty, 2.0, atol=1e-6)
@@ -240,7 +246,7 @@ def test_efe_loss_positivity(monkeypatch):
   coords = jnp.array([1.0, 0.0, 0.0, 0.0])
   kappa_rho_0 = 0.1
 
-  raw_residual_loss, wec_penalty_raw, _ = get_efe_loss(
+  raw_residual_loss, wec_penalty_raw, _, _ = get_efe_loss(
     metric_fn, coords, kappa_rho_0
   )
 
@@ -282,7 +288,7 @@ def test_efe_loss_comoving_dust_with_shift(monkeypatch):
   coords = jnp.array([0.0, 0.0, 0.0, 0.0])
   kappa_rho_0 = 0.5
 
-  raw_residual_loss, wec_penalty_raw, _ = get_efe_loss(
+  raw_residual_loss, wec_penalty_raw, _, _ = get_efe_loss(
     metric_fn, coords, kappa_rho_0
   )
 
@@ -324,7 +330,7 @@ def test_efe_loss_handles_collapsing_lapse(monkeypatch):
   coords = jnp.array([0.0, 0.0, 0.0, 0.0])
   kappa_rho_0 = 0.5
 
-  raw_residual_loss, wec_penalty_raw, _ = get_efe_loss(
+  raw_residual_loss, wec_penalty_raw, _, _ = get_efe_loss(
     metric_fn, coords, kappa_rho_0
   )
 

@@ -13,8 +13,9 @@ import optax
 
 from src.core.metric import MetricNN
 from src.training.checkpoint import (
+  ConstraintStates,
   TrainingState,
-  load_best_feasible,
+  load_best,
   load_meta,
   save_meta,
 )
@@ -43,18 +44,21 @@ from src.training.scheduler import (
   create_geometric_sgdr_schedule,
   full_cycle_without_improvement,
 )
+from src.training.selection import (
+  METRIC_SCORE,
+  RAW_CONTRACTION_RATIO_SQ,
+  RAW_COVER_SQ,
+  RAW_EFE_REL_SQ,
+  RAW_GRADIENT_SQ,
+  RAW_SHEAR_RATIO_SQ,
+  RAW_WEC_REL_SQ,
+  cmb_point_ratios,
+  efe_point_ratios,
+  selection_score,
+  selection_terms,
+)
 
 START_W_PENALTY = 1.0
-
-# l_wec/l_expand/l_shear/l_spatial are max(0, violation)**2-style hinge
-# losses that are 0.0 in the noise-free limit. l_shear/l_spatial have a
-# baked-in 1e-5 tolerance and can plausibly hit exact zero; l_wec has none
-# and is averaged over ~2000 freshly-resampled collocation points each step,
-# so it essentially never hits exact zero. Calibrated from this run's
-# observed history: l_wec has never been below 0.678, l_spatial's best is
-# 0.1999 - 0.5 requires real progress on the binding constraint (l_wec)
-# without demanding something never yet observed.
-FEASIBILITY_EPS = 0.5
 
 
 CSV_FIELDNAMES = [
@@ -69,6 +73,7 @@ CSV_FIELDNAMES = [
   METRIC_BAO,
   METRIC_SN_COVER,
   METRIC_OMEGA_M,
+  METRIC_SCORE,
 ]
 
 # Sidecar log for adaptive Augmented Lagrangian bump/decay events, kept
@@ -105,23 +110,34 @@ def save_checkpoint(
   path: str,
   model: eqx.Module,
   opt_state: optax.OptState,
-  step: int,
-  best_feasible_sn: float,
-  constraints: dict[str, ConstraintManager],
+  state: TrainingState,
 ) -> None:
   """Helper to serialize model leaves, opt_state, and meta state atomically."""
   os.makedirs(os.path.dirname(path), exist_ok=True)
   eqx.tree_serialise_leaves(path, model)
   eqx.tree_serialise_leaves(path + ".opt", opt_state)
-  state = TrainingState(
-    step=step,
-    best_feasible_sn=best_feasible_sn,
-    l_wec=constraints[METRIC_WEC].to_state(),
-    l_expand=constraints[METRIC_EXPAND].to_state(),
-    l_shear=constraints[METRIC_SHEAR].to_state(),
-    l_spatial=constraints[METRIC_SPATIAL].to_state(),
-  )
   save_meta(path + ".meta", state)
+
+
+def _training_state(
+  step: int,
+  l_sn: float,
+  score: float,
+  score_terms: dict[str, float],
+  constraints: dict[str, ConstraintManager],
+) -> TrainingState:
+  return TrainingState(
+    step=step,
+    l_sn=l_sn,
+    score=score,
+    score_terms=score_terms,
+    constraints=ConstraintStates(
+      wec=constraints[METRIC_WEC].to_state(),
+      expand=constraints[METRIC_EXPAND].to_state(),
+      shear=constraints[METRIC_SHEAR].to_state(),
+      spatial=constraints[METRIC_SPATIAL].to_state(),
+    ),
+  )
 
 
 def train_model(
@@ -247,7 +263,9 @@ def train_model(
       v_efe_loss = jax.vmap(
         lambda c: get_efe_loss(model, c, kappa_rho_0_today[0])
       )
-      l_phys_raw_vals, l_wec_raw_vals, w_4d_vals = v_efe_loss(coords)
+      l_phys_raw_vals, l_wec_raw_vals, w_4d_vals, efe_diagnostics = v_efe_loss(
+        coords
+      )
 
       # Compute point-wise Augmented Lagrangian penalty for WEC
       al_penalty_raw_vals = get_al_penalty(
@@ -283,7 +301,16 @@ def train_model(
       mean_w_spatial = jnp.mean(w_4d_vals)
 
       # 2. Data Loss (Supernova chi-squared)
-      l_sn, l_sn_cover = get_data_loss(model, sn_z, sn_mu, sn_err, sn_dir)
+      l_sn, l_sn_cover, cover_sq = get_data_loss(
+        model, sn_z, sn_mu, sn_err, sn_dir
+      )
+
+      # Raw quantities for the selection score. They are returned alongside
+      # the loss and never added to it, so no gradient flows through them.
+      shear_ratio_sq, contraction_ratio_sq, gradient_sq = jax.vmap(
+        lambda c: cmb_point_ratios(model, c)
+      )(coords_cmb)
+      efe_rel_sq, wec_rel_sq = efe_point_ratios(efe_diagnostics)
 
       # 3. BAO Loss (3D Chi-squared)
       l_bao = jax.lax.cond(
@@ -314,6 +341,12 @@ def train_model(
         METRIC_SN_COVER: l_sn_cover,
         METRIC_OMEGA_M: omega_m_today[0],
         METRIC_MEAN_W_SPATIAL: mean_w_spatial,
+        RAW_COVER_SQ: cover_sq,
+        RAW_SHEAR_RATIO_SQ: jnp.mean(shear_ratio_sq),
+        RAW_CONTRACTION_RATIO_SQ: jnp.mean(contraction_ratio_sq),
+        RAW_GRADIENT_SQ: jnp.mean(gradient_sq),
+        RAW_EFE_REL_SQ: jnp.mean(efe_rel_sq),
+        RAW_WEC_REL_SQ: jnp.mean(wec_rel_sq),
       }
 
     (loss, metrics), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(
@@ -332,8 +365,8 @@ def train_model(
     return model, opt_state, loss, metrics
 
   # Training State for early stopping
-  best_feasible_step: int | None = None
-  best_feasible_sn = float("inf")
+  best_step: int | None = None
+  best_score = float("inf")
   start_step = 0
 
   constraints = {
@@ -349,15 +382,15 @@ def train_model(
     opt_path = latest_path + ".opt"
     state = load_meta(meta_path)
 
-    start_step = state.step
-    best_feasible_step, best_feasible_sn = load_best_feasible(
-      checkpoint_path + ".meta"
-    )
+    # The saved step has already run; resume with the one after it.
+    start_step = state.step + 1
+    best_step, best_score = load_best(checkpoint_path + ".meta")
 
-    constraints[METRIC_WEC] = ConstraintManager.from_state(state.l_wec)
-    constraints[METRIC_EXPAND] = ConstraintManager.from_state(state.l_expand)
-    constraints[METRIC_SHEAR] = ConstraintManager.from_state(state.l_shear)
-    constraints[METRIC_SPATIAL] = ConstraintManager.from_state(state.l_spatial)
+    saved = state.constraints
+    constraints[METRIC_WEC] = ConstraintManager.from_state(saved.wec)
+    constraints[METRIC_EXPAND] = ConstraintManager.from_state(saved.expand)
+    constraints[METRIC_SHEAR] = ConstraintManager.from_state(saved.shear)
+    constraints[METRIC_SPATIAL] = ConstraintManager.from_state(saved.spatial)
 
     if os.path.exists(opt_path):
       opt_state = eqx.tree_deserialise_leaves(opt_path, opt_state)
@@ -371,13 +404,13 @@ def train_model(
     for i in range(max_steps):
       current_step = start_step + i
 
-      # Stop once a full SGDR cycle has passed without a new best feasible
-      # step. Until the first feasible step, max_steps is the bound.
-      if best_feasible_step is not None and full_cycle_without_improvement(
-        current_step, best_feasible_step, kick_period_0, kick_period_mult
+      # Stop once a full SGDR cycle has passed without a new best step. Until
+      # the first best step, max_steps is the bound.
+      if best_step is not None and full_cycle_without_improvement(
+        current_step, best_step, kick_period_0, kick_period_mult
       ):
         print(
-          f"No new best feasible step since step {best_feasible_step}; "
+          f"No new best step since step {best_step}; "
           f"stopping at step {current_step}."
         )
         break
@@ -408,6 +441,17 @@ def train_model(
       )
 
       current_loss = float(metrics[METRIC_LOSS])
+      current_sn = float(metrics[METRIC_SN])
+      score_terms = selection_terms(
+        l_sn=current_sn,
+        cover_sq=float(metrics[RAW_COVER_SQ]),
+        shear_ratio_sq=float(metrics[RAW_SHEAR_RATIO_SQ]),
+        contraction_ratio_sq=float(metrics[RAW_CONTRACTION_RATIO_SQ]),
+        gradient_sq=float(metrics[RAW_GRADIENT_SQ]),
+        efe_rel_sq=float(metrics[RAW_EFE_REL_SQ]),
+        wec_rel_sq=float(metrics[RAW_WEC_REL_SQ]),
+      )
+      current_score = selection_score(score_terms)
 
       # Update Constraints
       for k in CONSTRAINT_METRICS:
@@ -447,6 +491,7 @@ def train_model(
             METRIC_BAO: f"{float(metrics[METRIC_BAO]):.6e}",
             METRIC_SN_COVER: f"{float(metrics[METRIC_SN_COVER]):.6e}",
             METRIC_OMEGA_M: f"{float(metrics[METRIC_OMEGA_M]):.6e}",
+            METRIC_SCORE: f"{current_score:.6e}",
           }
         )
         log_file.flush()
@@ -458,18 +503,19 @@ def train_model(
             latest_path,
             model,
             opt_state,
-            current_step,
-            best_feasible_sn,
-            constraints,
+            _training_state(
+              current_step,
+              current_sn,
+              current_score,
+              score_terms,
+              constraints,
+            ),
           )
 
       if i % 100 == 0:
         print(
-          f"step {current_step}, loss: {current_loss:.6e} | "
-          f"{METRIC_PHYS}: {float(metrics[METRIC_PHYS]):.3e} | "
-          f"{METRIC_SN}: {float(metrics[METRIC_SN]):.3e} | "
-          f"{METRIC_WEC}: {float(metrics[METRIC_WEC]):.3e} | "
-          f"{METRIC_SN_COVER}: {float(metrics[METRIC_SN_COVER]):.3e}"
+          f"step {current_step}, loss: {current_loss:.3e} | "
+          f"{METRIC_SCORE}: {current_score:.3e}"
         )
 
       # Early Stopping & Safety Checks
@@ -484,34 +530,31 @@ def train_model(
         )
         break
 
-      # total_loss is ~96% w_sn*l_sn, so ranking by it alone would call
-      # a great-SN/physics-violating solution "best" (e.g. the pre-CMB-prior
-      # illegal-shear cheat from the last post). l_wec/l_expand/l_shear/
-      # l_spatial are hinge losses that are exactly 0.0 when compliant, so
-      # gate on those and rank only by l_sn among steps that pass.
-      # A near-Minkowski metric satisfies every hinge and reaches no
-      # supernovae, scoring l_sn = 0.0 on an empty numerator. best_warmup_steps
-      # holds the gate shut until the geometry carries real structure.
-      is_feasible = (
-        current_step >= best_warmup_steps
-        and float(metrics[METRIC_WEC]) <= FEASIBILITY_EPS
-        and float(metrics[METRIC_EXPAND]) <= FEASIBILITY_EPS
-        and float(metrics[METRIC_SHEAR]) <= FEASIBILITY_EPS
-        and float(metrics[METRIC_SPATIAL]) <= FEASIBILITY_EPS
-      )
-      current_sn = float(metrics[METRIC_SN])
-      if is_feasible and current_sn < best_feasible_sn:
-        best_feasible_sn = current_sn
-        best_feasible_step = current_step
+      # The best checkpoint is the step with the lowest selection score (see
+      # selection.py). Near-Minkowski geometry scores zero on every physics
+      # term and is held back only by supernova coverage, so
+      # best_warmup_steps keeps the opening steps, before the geometry carries
+      # structure, out of selection.
+      if current_step >= best_warmup_steps and current_score < best_score:
+        best_score = current_score
+        best_step = current_step
         if checkpoint_path:
-          print(f"Saving best feasible model at step {current_step}...")
+          breakdown = ", ".join(f"{k} {v:.2e}" for k, v in score_terms.items())
+          print(
+            f"Saving best model at step {current_step}: "
+            f"score {current_score:.3e} ({breakdown})"
+          )
           save_checkpoint(
             checkpoint_path,
             model,
             opt_state,
-            current_step,
-            best_feasible_sn,
-            constraints,
+            _training_state(
+              current_step,
+              current_sn,
+              current_score,
+              score_terms,
+              constraints,
+            ),
           )
 
   return model

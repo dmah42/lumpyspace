@@ -8,6 +8,8 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 
+from src.core.kinematics import comoving_kinematics
+
 
 class MetricNN(eqx.Module):
   """
@@ -110,16 +112,8 @@ class MetricNN(eqx.Module):
     """
     coords_today = jnp.array([1.0, 0.0, 0.0, 0.0])
     g = self(coords_today)
-    g_spatial = g[1:4, 1:4]
-    g_spatial_inv = jnp.linalg.inv(g_spatial)
-
-    dg_dt = jax.jacfwd(lambda c: self(c))(coords_today)[:, :, 0]
-    dg_spatial_dt = dg_dt[1:4, 1:4]
-
-    h_tensor = 0.5 * jnp.matmul(g_spatial_inv, dg_spatial_dt)
-    u0 = jnp.sqrt(jnp.abs(g[0, 0]) + 1e-9)
-    h_tensor_phys = h_tensor / u0
-    h_mean_today = jnp.trace(h_tensor_phys) / 3.0
+    dg = jax.jacfwd(lambda c: self(c))(coords_today)
+    h_mean_today = comoving_kinematics(g, dg).h_mean
 
     # Use the parameter directly as omega_m (PGD will enforce bounds)
     omega_m = self.omega_m_raw

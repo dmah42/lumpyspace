@@ -591,7 +591,7 @@ for shear.
     lands inside $[0.200, 0.267]$, and $\Omega_m$ is reported by the fit rather
     than clipped.
 
-- **Task 4.13: Accuracy-Normalised Best-Checkpoint Selection [FUTURE]**
+- **Task 4.13: Accuracy-Normalised Best-Checkpoint Selection [COMPLETED]**
   - **Scope:** selection only. The training loss, its weights and the
     Augmented Lagrangian are unchanged. This task decides which step is saved
     as the best checkpoint, and therefore when the cycle-based stop rule
@@ -621,14 +621,27 @@ for shear.
     | Shear | $\sigma/H$ at the CMB boundary | $10^{-5}$ (CMB quadrupole) |
     | Expansion | $\max(0, -H_i)/H$ per axis at the CMB boundary | $10^{-5}$ (CMB) |
     | Homogeneity | metric gradient amplitude $\sqrt{\sum(\partial_k g_{\mu\nu})^2}$ over the ~1 Gpc sample scale | $10^{-5}$ (Sachs-Wolfe, $\Phi \sim 10^{-5}$) |
-    | EFE | residual $\lvert G - \kappa T \rvert$ relative to the local matter term $\kappa\rho$ | $\sigma_{EFE}$, open decision |
-    | WEC | $\max(0, -R)$ relative to $\kappa\rho$ | $\sigma_{WEC}$, open decision |
+    | EFE | residual $\lvert G - \kappa T \rvert$ relative to the local matter term $\kappa\rho$ | $10^{-2}$ (see below) |
+    | WEC | $\max(0, -R)$ relative to $\kappa\rho$ | $10^{-2}$ (see below) |
 
-  - **Open decision:** the EFE and WEC have no measured accuracy, because
-    they are theoretical conditions. Their $\sigma$ states how precisely the
-    model must balance the matter it describes, and has to be chosen and
-    recorded explicitly. A relative $10^{-2}$ ("the field equations hold to 1%
-    of the matter term") is a reasonable starting point.
+  - **EFE and WEC accuracy:** these are theoretical conditions, so their
+    accuracy is chosen. $\sigma_{EFE} = \sigma_{WEC} = 10^{-2}$: the field
+    equations and the energy condition must hold to 1% of the local matter
+    term. Inhomogeneous alternatives to $\Lambda$ predict density effects of
+    order 10%, so a residual an order of magnitude smaller keeps an effect of
+    that size distinguishable from an unbalanced equation. Observational
+    estimates of the matter density (Planck's $\Omega_m$, $\omega_m$) are
+    inferred within $\Lambda$CDM and are not used to set it.
+  - **Comoving kinematics:** $H_i$, $H = \theta/3$ and $\sigma^2$ are those of
+    the matter congruence $u^\mu = \delta^\mu_0/\sqrt{-g_{00}}$, the same one
+    the stress-energy tensor uses: strain rate
+    $D_{ij} = \partial_t h_{ij} / (2\sqrt{-g_{00}})$ with the rest-frame
+    spatial metric $h_{ij} = g_{ij} - g_{0i}g_{0j}/g_{00}$ (Landau & Lifshitz
+    §84). With zero shift this reduces to $\partial_t g_{ij}/(2\sqrt{-g_{00}})$;
+    with a shift it carries the terms that formula drops. One function,
+    `src/core/kinematics.py`, serves the selection score, the CMB loss,
+    `get_cosmology_today()` and the monitoring notebook. Its use in the CMB
+    loss and in $\kappa\rho_0$ changes training as well as selection.
   - **Vanishing scales:** $H$ and $\kappa\rho$ go to zero on flat static
     space, so each ratio needs the same small-denominator guard style as
     `get_efe_loss`. With that guard, Minkowski scores zero on every physics
@@ -655,10 +668,13 @@ for shear.
       needs no migration: every field describes its own checkpoint (`step`,
       `l_sn`, $S$ and its terms), and the Augmented Lagrangian states sit
       under `constraints` keyed `wec`, `expand`, `shear`, `spatial`.
+    - A resumed run starts at the step after the saved one, so no step is
+      logged twice.
   - **Tests:** each term against metrics with known values (an FLRW metric
-    scores zero shear and zero contraction; a Kasner-like anisotropic metric
-    has an analytic $\sigma/H$); selection prefers lower $S$ regardless of
-    which terms differ; resume restores the best $S$ and step.
+    scores zero shear and zero contraction; a Kasner metric has an analytic
+    $\sigma/H$; Bell's spaceship has expansion carried entirely by the shift
+    terms); selection prefers lower $S$ regardless of which terms differ;
+    resume restores the best $S$ and step; a resumed run logs each step once.
   - **Sequencing:** lands before the absolute density parameterization and
     the expansion band (Task 4.12), so every run that tests those is judged
     by $S$.
