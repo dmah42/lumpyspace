@@ -2,10 +2,18 @@
 Unit tests for the MetricNN architecture.
 """
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
+import pytest
 
-from src.core.metric import MetricNN
+from src.core.kinematics import comoving_kinematics
+from src.core.metric import (
+  KAPPA_RHO_BARYON,
+  KAPPA_RHO_MATTER,
+  MetricNN,
+  clip_matter_density,
+)
 
 
 def test_metric_signature():
@@ -59,3 +67,47 @@ def test_metric_output_shape():
   g = model(coords)
 
   assert g.shape == (4, 4)
+
+
+def test_matter_density_bounds_match_the_physical_densities():
+  # kappa rho = 8 pi G rho / c^2 in units of Gpc^-2: 4.17e-28 kg/m^3 of
+  # baryons and 2.63e-27 kg/m^3 of total matter.
+  assert KAPPA_RHO_BARYON == pytest.approx(0.00741, rel=1e-3)
+  assert KAPPA_RHO_MATTER == pytest.approx(0.0467, rel=1e-3)
+
+
+def test_matter_density_starts_at_the_baryon_floor():
+  model = MetricNN(jax.random.PRNGKey(0))
+
+  kappa_rho_0, _ = model.get_cosmology_today()
+
+  assert kappa_rho_0[0] == pytest.approx(KAPPA_RHO_BARYON, rel=1e-6)
+
+
+def test_omega_m_is_the_density_over_the_critical_density():
+  model = MetricNN(jax.random.PRNGKey(0))
+  coords_today = jnp.array([1.0, 0.0, 0.0, 0.0])
+  h_today = comoving_kinematics(
+    model(coords_today), jax.jacfwd(model)(coords_today)
+  ).h_mean
+
+  kappa_rho_0, omega_m = model.get_cosmology_today()
+
+  assert omega_m[0] == pytest.approx(
+    float(kappa_rho_0[0] / (3.0 * h_today**2)), rel=1e-4
+  )
+
+
+@pytest.mark.parametrize(
+  "raw, expected",
+  [(-1.0, KAPPA_RHO_BARYON), (0.5, None), (10.0, KAPPA_RHO_MATTER)],
+)
+def test_clip_matter_density_keeps_baryons_to_total_matter(raw, expected):
+  model = MetricNN(jax.random.PRNGKey(0))
+  model = eqx.tree_at(lambda m: m.kappa_rho_0_raw, model, jnp.array([raw]))
+
+  kappa_rho_0, _ = clip_matter_density(model).get_cosmology_today()
+
+  if expected is None:
+    expected = KAPPA_RHO_BARYON * float(jnp.exp(raw))
+  assert kappa_rho_0[0] == pytest.approx(expected, rel=1e-5)

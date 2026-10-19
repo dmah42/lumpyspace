@@ -8,13 +8,14 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 
-from src.core.kinematics import comoving_kinematics
+from src.core.kinematics import comoving_kinematics, comoving_spatial_metric
 from src.core.metric import MetricNN
 from src.core.tensors import get_ricci_tensor
 from src.physics.geodesics import get_bao_distances, get_luminosity_distance
 
 METRIC_BAO = "l_bao"
 METRIC_EXPAND = "l_expand"
+METRIC_KAPPA_RHO_0 = "kappa_rho_0"
 METRIC_LOSS = "loss"
 METRIC_OMEGA_M = "omega_m"
 METRIC_PHYS = "l_phys"
@@ -70,16 +71,18 @@ def get_efe_loss(
   g_mu_nu = r_mu_nu - 0.5 * r_scalar * g
 
   # Matter Stress-Energy Tensor (Pressureless Dust)
-  # Density dilutes as 1 / sqrt(det(spatial_metric))
   spatial_metric = g[1:4, 1:4]
   gamma = jnp.linalg.det(spatial_metric)
   # Protect against negative/zero determinant during early training
   gamma = jnp.maximum(gamma, 1e-24)
 
-  # Extract trainable matter density parameter from the model
-  # Enforce Weak Energy Condition and a dynamic Baryonic matter floor
-  # dynamically scaled by the derived expansion rate today.
-  current_density = kappa_rho_0 / jnp.sqrt(gamma)
+  # Comoving dust conserves rho * sqrt(det h), where h is the spatial metric
+  # in the dust's own rest frame, so its density dilutes as 1 / sqrt(det h).
+  # kappa_rho_0 is the density where det h = 1.
+  rest_volume_sq = jnp.maximum(
+    jnp.linalg.det(comoving_spatial_metric(g)), 1e-24
+  )
+  current_density = kappa_rho_0 / jnp.sqrt(rest_volume_sq)
 
   # Compute mixed Einstein tensor G^m_n for coordinate invariance
   g_mixed = jnp.matmul(g_inv, g_mu_nu)

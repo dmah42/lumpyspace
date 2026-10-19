@@ -2,6 +2,7 @@
 Core metric tensor wrapper for the PINN.
 """
 
+import math
 from collections.abc import Callable
 
 import equinox as eqx
@@ -9,6 +10,28 @@ import jax
 import jax.numpy as jnp
 
 from src.core.kinematics import comoving_kinematics
+
+# Absolute matter densities today, in kg/m^3.
+# Baryons: Big Bang nucleosynthesis fixes the baryon-to-photon ratio from
+# deuterium abundances, and the measured CMB temperature fixes the photon
+# number density, so the baryon density follows directly.
+RHO_BARYON_KG_M3 = 4.17e-28
+# Total matter, baryons plus dark matter.
+RHO_MATTER_KG_M3 = 2.63e-27
+
+# kappa rho = 8 pi G rho / c^2, in code units of 1 / L_UNIT^2 with
+# L_UNIT = 1 Gpc (see geodesics.py).
+_G_SI = 6.67430e-11  # m^3 kg^-1 s^-2
+_C_SI = 2.99792458e8  # m/s
+_GPC_M = 3.085677581e25  # m
+_KAPPA_PER_KG_M3 = 8.0 * math.pi * _G_SI / _C_SI**2 * _GPC_M**2
+
+KAPPA_RHO_BARYON = _KAPPA_PER_KG_M3 * RHO_BARYON_KG_M3
+KAPPA_RHO_MATTER = _KAPPA_PER_KG_M3 * RHO_MATTER_KG_M3
+
+# kappa_rho_0 = KAPPA_RHO_BARYON * exp(kappa_rho_0_raw), so the raw parameter
+# spans [0, KAPPA_RHO_RAW_MAX] between the baryon floor and total matter.
+KAPPA_RHO_RAW_MAX = math.log(KAPPA_RHO_MATTER / KAPPA_RHO_BARYON)
 
 
 class MetricNN(eqx.Module):
@@ -23,7 +46,7 @@ class MetricNN(eqx.Module):
 
   mlp: eqx.nn.MLP
   spatial_weight_net: eqx.nn.MLP
-  omega_m_raw: jnp.ndarray
+  kappa_rho_0_raw: jnp.ndarray
 
   def __init__(self, key: jax.Array):
     # 4 inputs (t, x, y, z)
@@ -37,9 +60,10 @@ class MetricNN(eqx.Module):
       key=key,
     )
 
-    # Initialize trainable matter density parameter directly.
-    # Start with dark matter to see where we go.
-    self.omega_m_raw = jnp.array([0.3])
+    # Trainable absolute matter density, in log space above the baryon floor.
+    # Starts at the floor: baryons only, rising if the field equations need
+    # more matter.
+    self.kappa_rho_0_raw = jnp.array([0.0])
 
     # Initialize the final layer to be NEAR Minkowski.
     # We add tiny random noise to avoid the 'perfect' zero-derivative
@@ -115,9 +139,10 @@ class MetricNN(eqx.Module):
     dg = jax.jacfwd(lambda c: self(c))(coords_today)
     h_mean_today = comoving_kinematics(g, dg).h_mean
 
-    # Use the parameter directly as omega_m (PGD will enforce bounds)
-    omega_m = self.omega_m_raw
-    kappa_rho_0 = omega_m * 3.0 * (h_mean_today**2)
+    kappa_rho_0 = KAPPA_RHO_BARYON * jnp.exp(self.kappa_rho_0_raw)
+    # Omega_m is reported, not trained: the matter density as a fraction of
+    # the critical density 3 H^2 / kappa at the model's own expansion rate.
+    omega_m = kappa_rho_0 / jnp.maximum(3.0 * h_mean_today**2, 1e-12)
 
     return kappa_rho_0, omega_m
 
@@ -162,3 +187,16 @@ class MetricNN(eqx.Module):
 def get_metric_fn(model: MetricNN) -> Callable[[jnp.ndarray], jnp.ndarray]:
   """Returns a function g(coords) -> (4,4) array."""
   return lambda coords: model(coords)
+
+
+def clip_matter_density(model: MetricNN) -> MetricNN:
+  """
+  Projected gradient descent step for the matter density: clips it to
+  [KAPPA_RHO_BARYON, KAPPA_RHO_MATTER], at least the baryons and at most
+  baryons plus dark matter.
+  """
+  return eqx.tree_at(
+    lambda m: m.kappa_rho_0_raw,
+    model,
+    jnp.clip(model.kappa_rho_0_raw, 0.0, KAPPA_RHO_RAW_MAX),
+  )

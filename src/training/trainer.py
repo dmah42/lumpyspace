@@ -11,7 +11,7 @@ import jax
 import jax.numpy as jnp
 import optax
 
-from src.core.metric import MetricNN
+from src.core.metric import MetricNN, clip_matter_density
 from src.training.checkpoint import (
   ConstraintStates,
   TrainingState,
@@ -24,6 +24,7 @@ from src.training.loss import (
   CONSTRAINT_METRICS,
   METRIC_BAO,
   METRIC_EXPAND,
+  METRIC_KAPPA_RHO_0,
   METRIC_LOSS,
   METRIC_MEAN_W_SPATIAL,
   METRIC_OMEGA_M,
@@ -73,6 +74,7 @@ CSV_FIELDNAMES = [
   METRIC_BAO,
   METRIC_SN_COVER,
   METRIC_OMEGA_M,
+  METRIC_KAPPA_RHO_0,
   METRIC_SCORE,
 ]
 
@@ -141,7 +143,7 @@ def _training_state(
 
 
 def train_model(
-  # MetricNN, not eqx.Module: this function reaches for omega_m_raw,
+  # MetricNN, not eqx.Module: this function reaches for kappa_rho_0_raw,
   # get_cosmology_today() and get_spatial_weight(), so the wider annotation
   # was claiming a generality the body does not have.
   model: MetricNN,
@@ -188,17 +190,21 @@ def train_model(
     max_impulse_steps=max_impulse_steps,
   )
 
-  # Use gradient clipping to stabilize training for the MLP,
-  # but allow Omega_m to learn independently to avoid being suppressed.
+  # Use gradient clipping to stabilize training for the MLP, but let the
+  # matter density learn independently so it is not suppressed. It lives in
+  # log space, so a step of ~1e-2 moves the density by ~1%.
   def label_fn(tree):
     labels = jax.tree_util.tree_map(lambda _: "mlp", tree)
     return eqx.tree_at(
-      lambda m: m.omega_m_raw, labels, "omega", is_leaf=lambda x: x is None
+      lambda m: m.kappa_rho_0_raw,
+      labels,
+      "density",
+      is_leaf=lambda x: x is None,
     )
 
   optimizers = {
     "mlp": optax.chain(optax.clip_by_global_norm(1.0), optax.adam(lr_schedule)),
-    "omega": optax.adam(lambda s: lr_schedule(s) * 100.0),
+    "density": optax.adam(lambda s: lr_schedule(s) * 100.0),
   }
 
   optimizer = optax.multi_transform(optimizers, label_fn)
@@ -340,6 +346,7 @@ def train_model(
         METRIC_BAO: l_bao,
         METRIC_SN_COVER: l_sn_cover,
         METRIC_OMEGA_M: omega_m_today[0],
+        METRIC_KAPPA_RHO_0: kappa_rho_0_today[0],
         METRIC_MEAN_W_SPATIAL: mean_w_spatial,
         RAW_COVER_SQ: cover_sq,
         RAW_SHEAR_RATIO_SQ: jnp.mean(shear_ratio_sq),
@@ -358,10 +365,9 @@ def train_model(
     )
     model = eqx.apply_updates(model, updates)
 
-    # Projected Gradient Descent: enforce physical bounds [0.05, 0.3]
-    model = eqx.tree_at(
-      lambda m: m.omega_m_raw, model, jnp.clip(model.omega_m_raw, 0.05, 0.3)
-    )
+    # Projected Gradient Descent: keep the matter density between the baryons
+    # and the total matter.
+    model = clip_matter_density(model)
     return model, opt_state, loss, metrics
 
   # Training State for early stopping
@@ -491,6 +497,7 @@ def train_model(
             METRIC_BAO: f"{float(metrics[METRIC_BAO]):.6e}",
             METRIC_SN_COVER: f"{float(metrics[METRIC_SN_COVER]):.6e}",
             METRIC_OMEGA_M: f"{float(metrics[METRIC_OMEGA_M]):.6e}",
+            METRIC_KAPPA_RHO_0: f"{float(metrics[METRIC_KAPPA_RHO_0]):.6e}",
             METRIC_SCORE: f"{current_score:.6e}",
           }
         )

@@ -533,16 +533,16 @@ for shear.
     channel alone satisfies it. The model currently fits Pantheon+ almost
     entirely through $\sqrt{|g_{00}|}$. This is the part-4 degeneracy in
     sharper form: the geometry now fits the data, through the wrong mechanism.
-  - **Absolute density parameterization [FUTURE].** Replace the derived
-    `kappa_rho_0 = omega_m * 3 * h_mean**2` with a free absolute $\rho_0$
-    plus a baryonic floor. Flat static space with $\rho_0 > 0$ then yields
-    a nonzero EFE residual, so "there is matter here" becomes incompatible
-    with empty static space — a real expansion gradient. $\Omega_m$ becomes
-    a _derived, reported_ quantity rather than a knob clipped to
-    $[0.05, 0.3]$, which is strictly more tabula rasa than the status quo.
-    Directly targets the measured failure: with $h_{mean} \approx 0.002$,
-    $h_{mean}^2 \approx 4\times10^{-6}$ starves the density term, and a
-    universe with no matter in it has no reason to expand.
+  - **Absolute density parameterization [COMPLETED].** The trained parameter
+    is an absolute density $\kappa\rho_0$, bounded between the baryons and
+    the total matter (section 5.4). Flat static space with $\rho_0 > 0$
+    yields a nonzero EFE residual, so "there is matter here" is incompatible
+    with empty static space — a real expansion gradient. $\Omega_m$ is a
+    _derived, reported_ quantity, $\kappa\rho_0 / 3H_{mean}(t{=}1)^2$. This
+    targets the measured failure: with $h_{mean} \approx 0.002$, a density
+    derived as $\Omega_m \cdot 3h_{mean}^2$ was starved to
+    $\sim 10^{-5}$, and a universe with no matter in it has no reason to
+    expand.
   - **Present-day expansion band [FUTURE].** A two-sided hinge on
     $H_{mean}$ at $t=1$ over $[60, 80]$ km s⁻¹ Mpc⁻¹, or $[0.200, 0.267]$ in
     code units; exactly zero inside the band, so it joins the Augmented
@@ -681,6 +681,14 @@ for shear.
   - **Success Criterion:** the best checkpoint is the step with the lowest
     $S$, and its per-term breakdown states in accuracy units how far the
     geometry sits from the supernova data and from each physical condition.
+  - **Score noise [FUTURE]:** $S$ swings by two orders of magnitude between
+    logged steps. The shear and contraction ratios divide by $H^2$, so the
+    few CMB points where $H$ is near zero dominate the mean, and the 50
+    points are redrawn every step. Taking the minimum of that series favours
+    lucky draws over better geometry. Possible remedies, for selection only:
+    evaluate $S$ on a fixed point set so changes reflect the model; use a
+    median or trimmed mean over points to contain the near-zero-$H$ tail.
+    Raising the point count (Task 4.11) helps once the tail is contained.
 
 ---
 
@@ -824,35 +832,39 @@ gradient scale imbalance.
 
 ### 5.4 Trainable Matter Density Parameterization & Dynamic Floor
 
-To ensure the matter density remains physically consistent without freezing
-optimization gradients near constraints, we rely on Projected Gradient Descent
-(PGD) clipping rather than complex softplus mappings.
+The model's only trainable physical scalar is the absolute matter density
+$\kappa\rho_0$. It is independent of the expansion rate, so a geometry cannot
+remove its matter by not expanding.
 
-- **The Parameter:** Instead of directly training the raw physical density
-  $\kappa\rho_0$, the model's only trainable physical scalar is $\Omega_m$ (via
-  `omega_m_raw`).
-- **The Problem (Gradient Freezing vs. Complexity):** In early versions, complex
-  shifted-softplus mappings were used to enforce baryonic minimums. However,
-  these warped the local loss landscape and slowed convergence.
-- **The Solution (PGD Clipping):** We allow the optimizer to update
-  `omega_m_raw` freely during the backpropagation step. Then, in the outer
-  training loop (after the optimizer update), we enforce strict physical
-  boundaries using Projected Gradient Descent:
-  ```python
-  model = eqx.tree_at(
-      lambda m: m.omega_m_raw,
-      model,
-      jnp.clip(model.omega_m_raw, 0.05, 0.3)
-  )
-  ```
-  This guarantees that $\Omega_m$ strictly remains between the baryonic floor
-  ($0.05$) and the observed matter upper bound ($\sim 0.3$).
-- **Dynamic Density Computation:** The actual physical density $\kappa\rho_0$ is
-  derived dynamically inside the loss function at each step using the current
-  expansion rate: $$\kappa\rho_0 = \Omega_m \cdot 3 \cdot H_{mean}(1.0)^2$$ This
-  ensures the physical matter density is always perfectly coupled to the
-  network's current learned expansion history, satisfying the Friedmann equation
-  by definition at $t=0$.
+- **Bounds, as absolute densities:** $\kappa\rho = 8\pi G\rho/c^2$ in code
+  units of Gpc⁻². No expansion rate enters either bound.
+  - Floor: the baryons, $\rho_b = 4.17\times10^{-28}$ kg/m³, so
+    $\kappa\rho_b \approx 0.0074$. Big Bang nucleosynthesis fixes the
+    baryon-to-photon ratio from deuterium abundances, and the measured CMB
+    temperature fixes the photon number density.
+  - Ceiling: total matter, $\rho_m = 2.63\times10^{-27}$ kg/m³, so
+    $\kappa\rho_m \approx 0.047$. This end is softer: its tightest value comes
+    from fits within $\Lambda$CDM, with cluster and dynamical estimates in a
+    similar range.
+
+  Once $H(t{=}1)$ is in the observed band these correspond to
+  $\Omega_m \approx 0.04$–$0.26$. Bounding $\Omega_m$ directly would re-couple
+  the density to $H$ and bring back the $H \to 0 \Rightarrow \rho \to 0$
+  fixed point.
+- **Parameterization:** `kappa_rho_0_raw` lives in log space above the floor,
+  $\kappa\rho_0 = \kappa\rho_b\,e^{\text{raw}}$, so its optimizer group's step
+  of ~$10^{-2}$ moves the density by ~1%. It starts at the floor (baryons
+  only) and rises if the field equations need more matter.
+- **PGD clipping:** the optimizer updates `kappa_rho_0_raw` freely, then
+  `clip_matter_density` clips it to $[0, \ln(\kappa\rho_m/\kappa\rho_b)]$
+  after each step. Clipping avoids the landscape warping that
+  shifted-softplus bounds introduced.
+- **Dilution:** comoving dust conserves $\rho\sqrt{\det h}$, with
+  $h_{ij} = g_{ij} - g_{0i}g_{0j}/g_{00}$ the spatial metric in its own rest
+  frame, so the local density is $\kappa\rho_0/\sqrt{\det h}$.
+- **Reported:** $\Omega_m = \kappa\rho_0 / 3H_{mean}(t{=}1)^2$, derived at the
+  model's own expansion rate. It runs far outside $[0, 1]$ while $H$ is
+  unphysical.
 
 ### 5.5 EFE Coordinate Sampling & Active Redshift Region Prioritization
 

@@ -297,6 +297,40 @@ def test_efe_loss_comoving_dust_with_shift(monkeypatch):
   assert raw_residual_loss > 0.0
 
 
+def test_efe_density_dilutes_with_the_dust_rest_frame_volume(monkeypatch):
+  """
+  Comoving dust dilutes with the volume of its own rest frame,
+  det h = det(g_ij - g_0i g_0j / g_00). With g_ij = identity, g_00 = -1 and a
+  shift (0.2, -0.1, 0), det h = 1.05 while det g_ij = 1.
+  """
+  import src.training.loss
+
+  monkeypatch.setattr(
+    src.training.loss, "get_ricci_tensor", lambda m, c: jnp.zeros((4, 4))
+  )
+
+  class MetricWithShift:
+    def __call__(self, coords):
+      return jnp.array(
+        [
+          [-1.0, 0.2, -0.1, 0.0],
+          [0.2, 1.0, 0.0, 0.0],
+          [-0.1, 0.0, 1.0, 0.0],
+          [0.0, 0.0, 0.0, 1.0],
+        ]
+      )
+
+    def get_spatial_weight(self, coords):
+      return jnp.array([0.0])
+
+  kappa_rho_0 = 0.5
+  _, _, _, diagnostics = get_efe_loss(
+    MetricWithShift(), jnp.zeros(4), kappa_rho_0
+  )
+
+  assert jnp.allclose(diagnostics.kappa_rho, kappa_rho_0 / jnp.sqrt(1.05))
+
+
 def test_efe_loss_handles_collapsing_lapse(monkeypatch):
   """
   Verifies that get_efe_loss stays finite when the lapse (g_00) collapses to
