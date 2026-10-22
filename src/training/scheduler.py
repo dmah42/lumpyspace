@@ -25,11 +25,15 @@ GAMMA_DOWN = 2.0
 # violation to trigger penalty relaxation.
 DECAY_TAU = 0.5
 
-# MIN_W: The absolute minimum value the penalty weight is allowed to reach.
-MIN_W = 1.0
+# START_W: The default starting penalty weight. For a constraint whose full
+# violation is of order 1, it costs 0.5 * START_W = 50, on a par with the
+# supernova term w_sn * l_sn at chi^2/N = 5.
+START_W = 100.0
 
 # MAX_W: The absolute maximum value the penalty weight is allowed to reach.
-MAX_W = 1e6
+# It is sized for violations of order 1: at MAX_W a violation of 0.1 costs
+# 50, the size of the supernova term at chi^2/N = 5.
+MAX_W = 1e4
 
 
 class PenaltyAction(enum.Enum):
@@ -46,10 +50,12 @@ class AdaptivePenaltyState:
   Manages state and update logic for an Augmented Lagrangian penalty weight.
   It tracks an Exponential Moving Average (EMA) of the constraint violation,
   scales up the penalty weight if the violation stalls, and relaxes it when
-  the constraint is well-satisfied.
+  the constraint is well-satisfied. Decay returns the weight to w_min, its
+  starting pressure, and never below it.
   """
 
-  w_penalty: float = 1.0
+  w_penalty: float = START_W
+  w_min: float = START_W
   ema_violation: float = 1.0
   last_check_violation: float = float("inf")
 
@@ -73,7 +79,7 @@ class AdaptivePenaltyState:
           self.w_penalty = min(self.w_penalty * GAMMA, MAX_W)
           action = PenaltyAction.BUMPED
         elif self.ema_violation < DECAY_TAU * self.last_check_violation:
-          self.w_penalty = max(self.w_penalty / GAMMA_DOWN, MIN_W)
+          self.w_penalty = max(self.w_penalty / GAMMA_DOWN, self.w_min)
           action = PenaltyAction.DECAYED
       self.last_check_violation = self.ema_violation
 

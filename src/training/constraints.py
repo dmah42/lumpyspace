@@ -53,10 +53,20 @@ class ConstraintManager:
     )
 
   @classmethod
-  def from_state(cls, state: ConstraintState) -> "ConstraintManager":
-    """Deserializes state from a checkpoint record."""
+  def starting_at(cls, w_start: float) -> "ConstraintManager":
+    """A fresh constraint whose weight starts at, and never decays below,
+    w_start."""
+    return cls(scheduler=AdaptivePenaltyState(w_penalty=w_start, w_min=w_start))
+
+  @classmethod
+  def from_state(
+    cls, state: ConstraintState, w_min: float
+  ) -> "ConstraintManager":
+    """Deserializes state from a checkpoint record. w_min is the
+    constraint's configured weight floor, which is not checkpointed."""
     scheduler = AdaptivePenaltyState(
       w_penalty=state.w_penalty,
+      w_min=w_min,
       ema_violation=state.ema_violation,
       last_check_violation=state.last_check_violation,
     )

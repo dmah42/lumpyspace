@@ -159,30 +159,38 @@ Curvature ($K_{ij}$) and the spatial metric ($g_{ij}$):
 5. Calculate the Extrinsic Curvature: $K_{ij} = -\frac{1}{2N} \dot{g}_{ij}$.
 
 With these geometric primitives, we enforce three Augmented Lagrangian
-penalties, allowing for a realistic $\epsilon = 10^{-5}$ tolerance on the
-isotropy and homogeneity to prevent over-constraining the model:
+penalties. Each measures its condition as a dimensionless fraction, the way
+the CMB measures it, and is a linear hinge at the CMB's $10^{-5}$ accuracy
+(Task 4.14). $H_{floor} = 10^{-4}$ treats smaller rates as zero.
 
 1. **The Expansion Prior (Directional Expansion)**
    - **Math**: The directional expansion rates are the diagonal elements of the
      mixed extrinsic curvature tensor. $H_i = -K^i_i$ (no sum over $i$).
-   - **Penalty**:
-     $\mathcal{L}_{\text{expand}} = \sum_{i \in \{x,y,z\}} \max(0, -H_i)^2$. We
-     square the ReLU to ensure $C^1$ continuity, strictly penalizing contraction
-     on _any_ individual axis to prevent "Kasner-like" local minima.
+   - **Penalty**: the share of the squared directional rates that is
+     contraction,
+     $f_e = \sum_i \max(0, -H_i)^2 / (\sum_i H_i^2 + H_{floor}^2) \in [0, 1]$,
+     and $\mathcal{L}_{\text{expand}} = \max(0, f_e - 10^{-10})$, which
+     penalizes contraction on _any_ individual axis to prevent "Kasner-like"
+     local minima.
 
 2. **The Isotropy Prior (Shear $\sigma^2$)**
    - **Math**: The traceless shear tensor is
      $\sigma_{ij} = K_{ij} - \frac{1}{3} \text{Tr}(K) g_{ij}$.
    - **Scalar Formulation**: The shear scalar is
      $\sigma^2 = \frac{1}{2} \sigma_{ij} \sigma^{ij} = \frac{1}{2} (g^{ia} g^{jb} \sigma_{ij} \sigma_{ab})$.
-   - **Penalty**: $\mathcal{L}_{\text{shear}} = \max(0, \sigma^2 - 10^{-5})^2$.
+   - **Penalty**: the shear fraction
+     $f_\sigma = \sigma^2 / (H^2 + \sigma^2 + H_{floor}^2) \in [0, 1)$, which is
+     $(\sigma/H)^2$ while the shear is small, and
+     $\mathcal{L}_{\text{shear}} = \max(0, f_\sigma - 10^{-10})$.
 
 3. **Spatial Homogeneity (Curvature Gradients)**
    - **Math**: We penalize the spatial gradients of all metric components. Let
      $\partial_k g_{\mu\nu}$ be the spatial Jacobian (derivatives with respect
      to $x, y, z$).
-   - **Penalty**: $\mathcal{L}_{\text{spatial}} = \max(0, \sum_{k=1}^3
-     \sum*{\mu,\nu=0}^3 (\partial_k g*{\mu\nu})^2 - 10^{-5})^2.
+   - **Penalty**: the perturbation amplitude
+     $A = \sqrt{\sum_{k=1}^3 \sum_{\mu,\nu=0}^3 (\partial_k g_{\mu\nu})^2}$ per
+     unit code length, and
+     $\mathcal{L}_{\text{spatial}} = \max(0, A - 10^{-5})$.
 
 **Augmented Lagrangian Architecture:** Because these three penalties represent
 distinct physical constraints, summing them under a single $\lambda$ multiplier
@@ -193,7 +201,7 @@ expansion violation).
   separate `AdaptivePenaltyState` schedulers and three independent $\lambda$
   multipliers (`lambda_cmb_expand`, `lambda_cmb_shear`, `lambda_cmb_spatial`).
 - **Initialization**: Initialize all three penalties with a starting weight
-  $w=1.0$ and $\lambda=0.0$.
+  $w = 100$ and $\lambda = 0$ (section 5.2.4).
 
 **Stitching the Boundary (EFE Overlap):** Applying these penalties at
 $t \in [-4.0, -3.990]$ acts as a discrete boundary snapshot. To connect this
@@ -543,17 +551,43 @@ for shear.
     derived as $\Omega_m \cdot 3h_{mean}^2$ was starved to
     $\sim 10^{-5}$, and a universe with no matter in it has no reason to
     expand.
+  - **Outcome (measured 2026-10-18, best checkpoint at step 1310):** the
+    matter coupling holds. The EFE and WEC selection terms fell by about
+    eight orders of magnitude; the unbalanced curvature is about 20 times
+    $\kappa\rho$, down from about $10^6$. $\kappa\rho_0$ reached the
+    total-matter ceiling ($0.0467$) by step 130 and stayed there. $H_{mean}$
+    at $t=1$ is $\approx 0.0035$, 1.4% of $H_0$, so the reported $\Omega_m$ is
+    $\approx 1300$. The Friedmann constraint
+    $3H^2 - \sigma^2 + \tfrac12 {}^3R = \kappa\rho$ asks for
+    $H \approx 0.125$ in flat isotropic space, and the model balances its
+    matter with spatial curvature. $l_{sn} = 1.00$.
   - **Present-day expansion band [FUTURE].** A two-sided hinge on
-    $H_{mean}$ at $t=1$ over $[60, 80]$ km s⁻¹ Mpc⁻¹, or $[0.200, 0.267]$ in
-    code units; exactly zero inside the band, so it joins the Augmented
-    Lagrangian set alongside the CMB priors and adds a term to the selection
-    objective (Task 4.13).
-    `get_cosmology_today()` already computes the required quantity.
+    $H_{mean}$ at the observer, $(t, x, y, z) = (1, 0, 0, 0)$, over
+    $[60, 80]$ km s⁻¹ Mpc⁻¹, or $[0.200, 0.267]$ in code units. It is
+    exactly zero inside the band, joins the Augmented Lagrangian set
+    alongside the CMB priors, and adds a term to the selection objective
+    (Task 4.13). `get_cosmology_today()` already computes the required
+    quantity. Its violation measure and starting weight are specified in
+    Task 4.14.
     - **What it assumes.** The SH0ES value is a local distance ladder:
       geometric anchors calibrate Cepheids, Cepheids calibrate Type Ia
       absolute magnitudes, and $H_0$ is the velocity-distance slope over
       $0.01 < z < 0.15$. Homogeneity enters only through peculiar-velocity
       corrections and local density contrast, both bounded at the 1-2% level.
+      The Hubble-flow fit fixes the deceleration parameter at the
+      $\Lambda$CDM value $q_0 = -0.55$; a shift of $0.5$ in $q_0$ moves $H_0$
+      by about 2%, well inside the band's $\pm 14\%$.
+    - **Where it applies.** For any spacetime, the distance-redshift relation
+      of comoving sources near a comoving observer is
+      $cz \approx d\,(\theta/3 + \sigma_{ij} n^i n^j)$ at the observer
+      (Kristian & Sachs 1966). The shear term is a quadrupole on the sky, so
+      the sky-averaged slope that SH0ES measures is $\theta/3$ at the
+      observer's own point. The band therefore constrains that single point.
+      An average over a spatial volume would identify the measured $H_0$ with
+      the volume-averaged expansion rate, which differs from it in an
+      inhomogeneous universe by the backreaction this project tests. The
+      higher-order terms over the fitted redshift range are of order a few
+      percent, inside the band.
       (The Planck $67.4$ is the model-dependent figure, inferred from the
       sound horizon under $\Lambda$CDM.) A band also carries no information
       the data lacks — the slope of $\mu(z)$ in Pantheon+ _is_ $H_0$, and the
@@ -584,8 +618,9 @@ for shear.
     gets the first attempt: if decoupling the density from the expansion rate
     is enough to lift $H$ into the observed range unaided, that is a materially
     stronger result than clamping it there. The expansion band follows only if
-    $H_{mean}(t{=}1)$ is still outside it. Time-symmetry breaking at init is
-    warranted only if the two together cannot escape the static basin.
+    $H_{mean}(t{=}1)$ is still outside it, which the outcome above shows it
+    is. Time-symmetry breaking at init is warranted only if the two together
+    cannot escape the static basin.
   - **Success Criterion:** `l_sn` holds a reduced $\chi^2$ consistent with a
     genuine Pantheon+ fit while `l_sn_cover` stays at zero, $H_{mean}(t{=}1)$
     lands inside $[0.200, 0.267]$, and $\Omega_m$ is reported by the fit rather
@@ -690,6 +725,184 @@ for shear.
     median or trimmed mean over points to contain the near-zero-$H$ tail.
     Raising the point count (Task 4.11) helps once the tail is contained.
 
+- **Task 4.14: Physical Constraints from Step Zero [FUTURE]**
+  - **Scope:** the five inequality constraints, which are the weak energy
+    condition, the three CMB priors (expansion, isotropy, homogeneity) and the
+    present-day expansion band (Task 4.12). This task sets their violation
+    measures, their Augmented Lagrangian starting state, the adaptive
+    scheduler's bounds and the matching selection-score terms. The
+    field-equation residual keeps its fixed weight `w_efe`.
+  - **Current constraints and their problems:**
+    - The CMB losses square absolute quantities in code units:
+      $\max(0, -H_i)^2$, $\max(0, \sigma^2 - 10^{-5})^2$ and
+      $\max(0, \sum(\partial_k g_{\mu\nu})^2 - 10^{-5})^2$. Their tolerances
+      do not scale with the expansion rate the CMB measures them against,
+      and squaring crushes a miss of $10^{-3}$ to $10^{-6}$.
+    - Every constraint starts at $w = 1$, $\lambda = 0$ and gains strength only
+      through the scheduler's $\times 5$ bumps at stalled checks, the first at
+      step 1000. In the part-5 run the boundary contraction gave way only at
+      step 7000, at $w = 15{,}625$.
+    - The absolute density run (Task 4.12) left the boundary at
+      $\sigma/H \approx 4$ with one axis contracting, under constraints that
+      carried almost no force at that point in the run.
+    - The selection score's shear and contraction ratios divide by $H^2$, so
+      CMB points with $H$ near zero dominate it (Task 4.13, Score noise).
+  - **Why the constraints stay Augmented Lagrangian:** blog post 3 showed that a
+    fixed-weight energy-condition penalty settles on a compromise: the
+    optimizer keeps a violation that helps the supernova fit and pays its fixed
+    price. The multiplier $\lambda$ accumulates while any violation remains, so
+    the price rises until the violation is zero; that run took `l_wec` to
+    exactly 0. Blog post 4 showed the same equilibrium for a fixed penalty
+    parameter, which the adaptive scheduler (section 5.2.4) addresses by
+    escalating $w$ when progress stalls. Both hold for every constraint here:
+    each is a physical condition, and a fixed weight would make it
+    negotiable.
+  - **Why they start with real weight:** the low starting state let the
+    supernova fit establish itself before the physics engaged, because a
+    physics-heavy start collapsed to Minkowski (section 5.2.1). Minkowski no
+    longer costs nothing: the absolute density gives flat
+    static space an EFE residual of $\kappa\rho_0$, `l_sn_cover` penalises
+    unreachable supernovae, and the expansion band excludes $H \approx 0$. So
+    each constraint starts at a weight that makes a full violation comparable
+    to the data terms, and the Augmented Lagrangian keeps both of its jobs:
+    $\lambda$ accumulates towards exact satisfaction, and $w$ escalates when
+    progress stalls.
+  - **Violation measures:** each is dimensionless and evaluated per point. The
+    constraint is a linear hinge on its tolerance, $c = \max(0, f - \epsilon)$,
+    averaged over the points.
+
+    | constraint | points | $f$ | range | $\epsilon$ |
+    | --- | --- | --- | --- | --- |
+    | Shear | CMB boundary | $\sigma^2 / (H^2 + \sigma^2 + H_{floor}^2)$ | $[0, 1)$ | $10^{-10}$ |
+    | Expansion | CMB boundary | $\sum_i \max(0, -H_i)^2 / (\sum_i H_i^2 + H_{floor}^2)$ | $[0, 1]$ | $10^{-10}$ |
+    | Homogeneity | CMB boundary | $\sqrt{\sum_k \sum_{\mu\nu} (\partial_k g_{\mu\nu})^2}$ | $\ge 0$ | $10^{-5}$ |
+    | WEC | EFE points | $\max(0, -R)$ | $\ge 0$ | $0$ |
+    | Expansion band | observer, $t = 1$ | $\max(0, H_{lo} - H_{obs})/H_{lo} + \max(0, H_{obs} - H_{hi})/H_{hi}$ | $\ge 0$ | $0$ |
+
+    - Shear and expansion: $f \approx (\sigma/H)^2$ and the squared
+      contraction-to-expansion ratio while those are small, so
+      $\epsilon = 10^{-10}$ is the CMB's $10^{-5}$ bound on the ratio. Both
+      approach 1 when shear or contraction dominates the expansion.
+      $H_{floor} = 10^{-4}$ code units ($\approx 0.03$ km s⁻¹ Mpc⁻¹) treats
+      smaller rates as zero, which keeps the fractions and their gradients
+      bounded on near-static geometry; isotropic static space scores 0.
+    - Homogeneity: the metric perturbation amplitude per Gpc, against the
+      Sachs-Wolfe $10^{-5}$. The metric components are of order 1, so an
+      order-1 perturbation scores order 1.
+    - WEC: the linear violation of blog post 3, which keeps a constant slope
+      however large the violation. The first stage-one run used the bounded
+      fraction $\max(0, -R) / (\max(0, -R) + \kappa\rho)$. With $|R|$ at
+      100-300 times $\kappa\rho$ it sat near 1 wherever $R < 0$, so it
+      counted negative-curvature points without measuring them, and its
+      slope there, $\kappa\rho / (|R| + \kappa\rho)^2 \approx 5 \times 10^{-4}$,
+      left the largest violations almost unpushed. Its penalty sits outside
+      the spatial weighting of section 5.7 (see WEC outside the spatial
+      weighting, below).
+    - Expansion band: $H_{obs}$ is the comoving $H_{mean}$ at the observer,
+      $(1, 0, 0, 0)$, from `get_cosmology_today()`; Task 4.12 gives the
+      reason for a single point. $H_{lo}, H_{hi} = 60, 80$ km s⁻¹ Mpc⁻¹,
+      converted to code units by an explicit factor ($0.2001$, $0.2669$). A
+      static universe scores 1. The rest of the slice is unconstrained, so a
+      local expanding region around the observer is an admissible solution;
+      the supernovae across the light cone still have to fit it.
+  - **Starting state:** $\lambda_0 = 0$ for every constraint. The penalty is
+    $\lambda c + \tfrac{1}{2} w c^2$, and a satisfied constraint costs nothing
+    at any weight.
+    - CMB priors and expansion band: $w_0 = 100$. A full violation
+      ($c = 1$) costs 50 at step 0, the same as `w_sn * l_sn` at
+      $\chi^2/N = 5$.
+    - WEC: $w_0 = 10$, the weight of blog post 3's run. Its violation is
+      unbounded: mean $\max(0, -R)$ of 1-3, as in the first stage-one run,
+      costs 5-45 at this weight.
+  - **Scheduler bounds:** each constraint's floor is its own $w_0$, so decay
+    returns a weight to its starting pressure and never below it, and a
+    constraint that is met and then regresses meets that pressure at once.
+    The floor is configuration, set per constraint in the trainer, and is not
+    checkpointed. `MAX_W` $= 10^4$ for all. It is sized for violations of
+    order 1: at the cap a violation of $0.1$ costs 50, the size of the data
+    terms. The $10^6$ cap was sized for squared absolute violations, where a
+    miss of $10^{-3}$ registered as $10^{-6}$. The check interval is
+    unchanged.
+  - **Selection score:** the shear and expansion terms use the same
+    fractions in accuracy units: $f_\sigma / 10^{-10}$ and $f_e / 10^{-10}$.
+    Homogeneity, EFE and WEC are unchanged. The
+    expansion band adds $(\Delta H / \sigma_H)^2$, with $\Delta H$ the distance
+    of $H_{obs}$ outside the band and $\sigma_H = 1.04$ km s⁻¹ Mpc⁻¹
+    ($0.00347$ code units), the SH0ES uncertainty. The shear and expansion
+    terms are bounded at $10^{10}$, which contains the near-zero-$H$ tail
+    described under Score noise (Task 4.13); the per-step redraw of the CMB
+    points remains.
+  - **Implementation:**
+    - `l_expand`, `l_shear`, `l_spatial` and `l_wec` keep their names with the
+      definitions above. `l_h0` joins the loss terms and `h_today` ($H_{obs}$)
+      the run metrics in `training_metrics.csv`. Penalty events stay in their
+      own channel.
+    - `ConstraintStates` gains `h0`. The change lands with a fresh run, so
+      the `.meta` schema needs no migration.
+    - Sections 4.3 and 5.2.4 describe the CMB forms and the scheduler.
+  - **Tests:** expanding FLRW scores 0 on shear and expansion; contracting FLRW
+    scores 1 on expansion; Kasner $p = (-\tfrac13, \tfrac23, \tfrac23)$ scores
+    $\tfrac34$ on shear and $\tfrac19$ on expansion; Minkowski scores 0 on
+    both; the band scores 0 inside, 1 at $H_{obs} = 0$ and its relative
+    excess above; the scheduler decays to each constraint's own floor and
+    caps at `MAX_W`; resume restores the `h0` state.
+  - **Stage-one outcome (measured 2026-10-19, step ~3180):** training is
+    stable from $w_0$ and the model stays off Minkowski without the
+    expansion band. The boundary expands on every axis, close to
+    isotropically ($\sigma/H \approx 0.07$ at the origin). `l_expand` is
+    exactly 0 on about a third of logged steps after step 2500, `l_shear` is
+    $\approx 0.01$, `l_spatial` fell from $0.47$ to $0.075$, `l_phys` from
+    $0.28$ to $0.04$, and `l_sn_cover` touches 0. The best $S$ fell from
+    $4.7 \times 10^9$ to $1.2 \times 10^8$. $\kappa\rho_0$ sits at the
+    ceiling; the reported $\Omega_m$ fell from $\approx 600$ to
+    $\approx 125$, so $H_{obs}$ rose to $\approx 0.011$, about 4% of $H_0$.
+    `l_wec` has held at $\approx 1.05$ since step 600, through bumps to
+    $w = 50$ (step 2000) and $w = 250$ (step 3000, $\lambda = 327$).
+  - **WEC outside the spatial weighting [FUTURE]:**
+    - **Mechanism:** the WEC penalty is added to the EFE residual before
+      the per-point homoscedastic weighting
+      $\tfrac12 e^{-2W} L + W$ (section 5.7). The optimum
+      $W = \tfrac12 \ln L$ rises with $L$, the cost becomes
+      $\approx \tfrac12 (1 + \ln L)$, and the gradient on the metric becomes
+      $\tfrac12 \partial \ln L$, which no constant multiple of $L$ changes.
+      The scheduler's bumps and the growth of $\lambda$ are absorbed by
+      raising $W$ where WEC is violated. This is the lazy optimizer of blog
+      post 3 ($\sigma \to \infty$), acting per point. The CMB terms sit
+      outside the weighting and respond to their weights.
+    - **Evidence:** at step 2450 the unweighted WEC penalty
+      ($\lambda \bar c + \tfrac12 w \bar c^2$ with $\lambda = 65$, $w = 50$,
+      $\bar c \approx 1.03$) is $\gtrsim 93$, while the total loss less the
+      data and CMB terms leaves $\approx 3$ for EFE and WEC together, against
+      $\tfrac12 (1 + \ln 93) \approx 2.8$. At step 3000 the bump to
+      $w = 250$, $\lambda = 327$ would add $\approx 270$ unweighted; the loss
+      rose from 13.4 to 17.8 and `l_wec` did not move. $W$ itself has not
+      been measured.
+    - **Change:** the per-point WEC penalty $\lambda c + \tfrac12 w c^2$ is
+      averaged over the EFE points and added to the loss alongside the CMB
+      penalties. The spatial weighting applies to the EFE residual alone.
+    - **Diagnostic:** the mean, maximum and spread of $W$ over the EFE
+      points, written each logged step to stdout or a sidecar log (outside
+      `training_metrics.csv`). The same suppression acts on the EFE
+      residual, and any change there waits on this measurement.
+    - **Resumption:** lands with a fresh run. A checkpoint's WEC state was
+      accumulated under suppression, and applied unweighted it would
+      dominate the loss.
+  - **Sequencing:** stage one, then WEC outside the spatial weighting, then
+    the expansion band.
+    - Stage one: the violation measures, starting state, scheduler bounds
+      and score terms for the four existing constraints, with a run to
+      confirm that starting at $w_0$ trains stably. The case for a real
+      starting weight rests partly on the expansion band, so this stage
+      also shows whether the absolute density and coverage alone keep the
+      model off Minkowski.
+    - WEC outside the spatial weighting, with the $W$ diagnostic, on a
+      fresh run.
+    - The expansion band joins the set on the same mechanism.
+  - **Success Criterion:** every constraint carries force from step 0;
+    $H_{obs}$ enters $[0.200, 0.267]$; the CMB shear and expansion fractions
+    fall towards tolerance without any weight reaching `MAX_W`; `l_sn` holds
+    a genuine fit with `l_sn_cover` at zero.
+
 ---
 
 ## 5. Advanced Training Dynamics: Batching & Gradient Balancing
@@ -788,16 +1001,24 @@ training loop. This prevents the constraint from stalling in the late stages of
 training when the violation becomes extremely small.
 
 - **The Algorithm:**
-  1. Define a check interval $N_{check}$ (e.g., every 500 steps).
-  2. At step $t = k \cdot N_{check}$, compare the current exponential moving
+  1. Every constraint starts at its own $\mu_0$ with $\lambda = 0$ (Task
+     4.14). The CMB priors start at $\mu_0 = 100$: their violations are
+     fractions of order 1 at most, so a full violation costs
+     $\tfrac12 \mu_0 = 50$ from step 0, on a par with the supernova term.
+     WEC, whose violation $\max(0, -R)$ is unbounded, starts at
+     $\mu_0 = 10$.
+  2. Define a check interval $N_{check}$ (`adaptive_check_interval`, 1000
+     steps).
+  3. At step $t = k \cdot N_{check}$, compare the current exponential moving
      average of the violation $\mathcal{L}_{k}$ against the violation at the
      previous check $\mathcal{L}_{k-1}$.
-  3. If the violation has not decreased by a sufficient margin (e.g.,
-     $\mathcal{L}_{k} > \tau \mathcal{L}_{k-1}$, where $\tau = 0.9$):
-     - Multiply the penalty parameter by a growth factor:
-       $\mu \leftarrow \gamma \mu$ (e.g., $\gamma = 1.5$ or $2.0$).
-  4. Cap $\mu$ at a massive maximum value (e.g., $10^5$) to prevent `NaN`
-     explosions.
+  4. If the violation has not decreased by a sufficient margin
+     ($\mathcal{L}_{k} > \tau \mathcal{L}_{k-1}$, $\tau = 0.95$), multiply the
+     penalty parameter by $\gamma = 5$. If it has fallen below half
+     ($\mathcal{L}_{k} < 0.5 \mathcal{L}_{k-1}$), divide it by 2.
+  5. Bound $\mu$ to $[\mu_0, 10^4]$: decay returns it to its starting
+     pressure and never below. The cap is sized for violations of order 1,
+     where a violation of $0.1$ at the cap costs 50.
 - **Implementation:** Because $\mu$ (e.g., `w_wec_val`) is passed to the
   JIT-compiled `step` function as a dynamic `jnp.ndarray`, we can seamlessly
   multiply it by $\gamma$ in the outer Python loop without triggering

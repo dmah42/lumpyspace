@@ -41,18 +41,19 @@ def test_expanding_flrw_meets_every_cmb_condition():
 
 
 def test_contracting_flrw_contracts_on_every_axis():
-  # Each axis contracts at the full mean rate: sum_i (H_i / H)^2 = 3.
+  # Every directional rate is contraction, so the fraction is 1.
   shear, contraction, _ = cmb_point_ratios(
     _flrw(-0.3), jnp.array([-3.995, 0.0, 0.0, 0.0])
   )
 
   assert jnp.allclose(shear, 0.0, atol=1e-8)
-  assert jnp.allclose(contraction, 3.0, atol=1e-4)
+  assert jnp.allclose(contraction, 1.0, atol=1e-6)
 
 
-def test_kasner_shear_ratio():
-  # Kasner p = (-1/3, 2/3, 2/3) at t = 2: sigma^2 = 1/12 and H = 1/6, so
-  # (sigma/H)^2 = 3, and only x contracts, at -H: (H_x/H)^2 = 1.
+def test_kasner_shear_and_contraction_fractions():
+  # Kasner p = (-1/3, 2/3, 2/3) at t = 2: H_i = (-1/6, 1/3, 1/3), H = 1/6,
+  # sigma^2 = 1/12. Shear: (1/12) / (1/36 + 1/12) = 3/4. Contraction:
+  # (1/36) / (1/36 + 1/9 + 1/9) = 1/9.
   p = jnp.array([-1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0])
 
   def metric(coords):
@@ -60,8 +61,8 @@ def test_kasner_shear_ratio():
 
   shear, contraction, _ = cmb_point_ratios(metric, jnp.array([2.0, 0, 0, 0]))
 
-  assert jnp.allclose(shear, 3.0, atol=1e-4)
-  assert jnp.allclose(contraction, 1.0, atol=1e-4)
+  assert jnp.allclose(shear, 0.75, atol=1e-5)
+  assert jnp.allclose(contraction, 1.0 / 9.0, atol=1e-5)
 
 
 def test_spatial_gradient_is_the_squared_metric_derivative():
@@ -82,7 +83,7 @@ def test_minkowski_scores_zero_on_the_cmb_conditions():
   ratios = cmb_point_ratios(metric, jnp.array([-3.995, 0.1, 0.2, 0.3]))
 
   for r in ratios:
-    assert r == 0.0
+    assert jnp.allclose(r, 0.0, atol=1e-20)
 
 
 def test_efe_point_ratios_are_relative_to_the_matter_term():
@@ -115,8 +116,8 @@ def test_selection_terms_are_in_accuracy_units():
   terms = selection_terms(
     l_sn=0.9,
     cover_sq=SIGMA_Z**2,
-    shear_ratio_sq=CMB_ACCURACY**2,
-    contraction_ratio_sq=4 * CMB_ACCURACY**2,
+    shear_fraction=CMB_ACCURACY**2,
+    contraction_fraction=4 * CMB_ACCURACY**2,
     gradient_sq=9 * CMB_ACCURACY**2,
     efe_rel_sq=SIGMA_EFE**2,
     wec_rel_sq=0.25 * SIGMA_WEC**2,
@@ -143,8 +144,8 @@ def test_lower_score_wins_whichever_terms_differ():
   # fit that balances it.
   base = dict(
     cover_sq=0.0,
-    shear_ratio_sq=0.0,
-    contraction_ratio_sq=0.0,
+    shear_fraction=0.0,
+    contraction_fraction=0.0,
     gradient_sq=0.0,
     wec_rel_sq=0.0,
   )

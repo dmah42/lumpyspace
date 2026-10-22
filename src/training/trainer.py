@@ -41,17 +41,18 @@ from src.training.loss import (
   get_efe_loss,
 )
 from src.training.scheduler import (
+  START_W,
   PenaltyAction,
   create_geometric_sgdr_schedule,
   full_cycle_without_improvement,
 )
 from src.training.selection import (
   METRIC_SCORE,
-  RAW_CONTRACTION_RATIO_SQ,
+  RAW_CONTRACTION_FRACTION,
   RAW_COVER_SQ,
   RAW_EFE_REL_SQ,
   RAW_GRADIENT_SQ,
-  RAW_SHEAR_RATIO_SQ,
+  RAW_SHEAR_FRACTION,
   RAW_WEC_REL_SQ,
   cmb_point_ratios,
   efe_point_ratios,
@@ -59,8 +60,15 @@ from src.training.selection import (
   selection_terms,
 )
 
-START_W_PENALTY = 1.0
-
+# Starting penalty weight per constraint, which is also its floor. The CMB
+# violations are fractions of order 1. The WEC violation, max(0, -R), is
+# unbounded, so it starts lower.
+START_WEIGHTS = {
+  METRIC_WEC: 10.0,
+  METRIC_EXPAND: START_W,
+  METRIC_SHEAR: START_W,
+  METRIC_SPATIAL: START_W,
+}
 
 CSV_FIELDNAMES = [
   "step",
@@ -313,7 +321,7 @@ def train_model(
 
       # Raw quantities for the selection score. They are returned alongside
       # the loss and never added to it, so no gradient flows through them.
-      shear_ratio_sq, contraction_ratio_sq, gradient_sq = jax.vmap(
+      shear_fraction, contraction_fraction, gradient_sq = jax.vmap(
         lambda c: cmb_point_ratios(model, c)
       )(coords_cmb)
       efe_rel_sq, wec_rel_sq = efe_point_ratios(efe_diagnostics)
@@ -349,8 +357,8 @@ def train_model(
         METRIC_KAPPA_RHO_0: kappa_rho_0_today[0],
         METRIC_MEAN_W_SPATIAL: mean_w_spatial,
         RAW_COVER_SQ: cover_sq,
-        RAW_SHEAR_RATIO_SQ: jnp.mean(shear_ratio_sq),
-        RAW_CONTRACTION_RATIO_SQ: jnp.mean(contraction_ratio_sq),
+        RAW_SHEAR_FRACTION: jnp.mean(shear_fraction),
+        RAW_CONTRACTION_FRACTION: jnp.mean(contraction_fraction),
         RAW_GRADIENT_SQ: jnp.mean(gradient_sq),
         RAW_EFE_REL_SQ: jnp.mean(efe_rel_sq),
         RAW_WEC_REL_SQ: jnp.mean(wec_rel_sq),
@@ -376,10 +384,8 @@ def train_model(
   start_step = 0
 
   constraints = {
-    METRIC_WEC: ConstraintManager(),
-    METRIC_EXPAND: ConstraintManager(),
-    METRIC_SHEAR: ConstraintManager(),
-    METRIC_SPATIAL: ConstraintManager(),
+    k: ConstraintManager.starting_at(START_WEIGHTS[k])
+    for k in CONSTRAINT_METRICS
   }
 
   if resume and checkpoint_path:
@@ -393,10 +399,15 @@ def train_model(
     best_step, best_score = load_best(checkpoint_path + ".meta")
 
     saved = state.constraints
-    constraints[METRIC_WEC] = ConstraintManager.from_state(saved.wec)
-    constraints[METRIC_EXPAND] = ConstraintManager.from_state(saved.expand)
-    constraints[METRIC_SHEAR] = ConstraintManager.from_state(saved.shear)
-    constraints[METRIC_SPATIAL] = ConstraintManager.from_state(saved.spatial)
+    for k, saved_state in (
+      (METRIC_WEC, saved.wec),
+      (METRIC_EXPAND, saved.expand),
+      (METRIC_SHEAR, saved.shear),
+      (METRIC_SPATIAL, saved.spatial),
+    ):
+      constraints[k] = ConstraintManager.from_state(
+        saved_state, w_min=START_WEIGHTS[k]
+      )
 
     if os.path.exists(opt_path):
       opt_state = eqx.tree_deserialise_leaves(opt_path, opt_state)
@@ -451,8 +462,8 @@ def train_model(
       score_terms = selection_terms(
         l_sn=current_sn,
         cover_sq=float(metrics[RAW_COVER_SQ]),
-        shear_ratio_sq=float(metrics[RAW_SHEAR_RATIO_SQ]),
-        contraction_ratio_sq=float(metrics[RAW_CONTRACTION_RATIO_SQ]),
+        shear_fraction=float(metrics[RAW_SHEAR_FRACTION]),
+        contraction_fraction=float(metrics[RAW_CONTRACTION_FRACTION]),
         gradient_sq=float(metrics[RAW_GRADIENT_SQ]),
         efe_rel_sq=float(metrics[RAW_EFE_REL_SQ]),
         wec_rel_sq=float(metrics[RAW_WEC_REL_SQ]),
@@ -549,7 +560,8 @@ def train_model(
           breakdown = ", ".join(f"{k} {v:.2e}" for k, v in score_terms.items())
           print(
             f"Saving best model at step {current_step}: "
-            f"score {current_score:.3e} ({breakdown})"
+            f"score {current_score:.3e}\n"
+            f"  ({breakdown})"
           )
           save_checkpoint(
             checkpoint_path,

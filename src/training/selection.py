@@ -10,17 +10,12 @@ docs/technical_design.md.
 
 from collections.abc import Callable
 
-import jax
 import jax.numpy as jnp
 
-from src.core.kinematics import comoving_kinematics
-from src.training.loss import EfeDiagnostics
+from src.training.loss import CMB_ACCURACY, EfeDiagnostics, cmb_fractions
 
 # Redshift scatter from peculiar velocities (~300 km/s).
 SIGMA_Z = 1e-3
-# CMB temperature anisotropy level, which bounds sigma/H, contraction/H and
-# metric perturbations at last scattering.
-CMB_ACCURACY = 1e-5
 # The field equations and the weak energy condition must hold to 1% of the
 # local matter term: an order of magnitude below the ~10% density effects that
 # inhomogeneous alternatives to Lambda predict, so an effect of that size
@@ -28,17 +23,17 @@ CMB_ACCURACY = 1e-5
 SIGMA_EFE = 1e-2
 SIGMA_WEC = 1e-2
 
-# Small-denominator floor, matching get_efe_loss. Flat static space has
-# H = 0 and kappa rho = 0, and with this floor it scores zero on every
-# physics term.
+# Small-denominator floor, matching get_efe_loss. Vacuum has kappa rho = 0,
+# and with this floor it scores zero on the field-equation and energy
+# condition terms.
 _DENOM_FLOOR = 1e-12
 
 METRIC_SCORE = "score"
 
 # Per-step raw means returned by the training step.
 RAW_COVER_SQ = "cover_sq"
-RAW_SHEAR_RATIO_SQ = "shear_ratio_sq"
-RAW_CONTRACTION_RATIO_SQ = "contraction_ratio_sq"
+RAW_SHEAR_FRACTION = "shear_fraction"
+RAW_CONTRACTION_FRACTION = "contraction_fraction"
 RAW_GRADIENT_SQ = "gradient_sq"
 RAW_EFE_REL_SQ = "efe_rel_sq"
 RAW_WEC_REL_SQ = "wec_rel_sq"
@@ -66,19 +61,13 @@ def cmb_point_ratios(
   metric_fn: Callable[[jnp.ndarray], jnp.ndarray], coords: jnp.ndarray
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
   """
-  CMB-boundary quantities at one point, in the dimensionless forms the CMB
-  constrains: (sigma/H)^2, sum_i (max(0, -H_i)/H)^2, and sum (d_k g_mu_nu)^2
-  over the three spatial derivatives (a squared perturbation amplitude per
-  unit code length, ~1 Gpc).
+  CMB-boundary quantities at one point: the shear and contraction fractions
+  the CMB loss constrains (see cmb_fractions), which approximate (sigma/H)^2
+  and the squared contraction-to-expansion ratio while those are small, and
+  the squared perturbation amplitude.
   """
-  g = metric_fn(coords)
-  dg = jax.jacfwd(metric_fn)(coords)
-  kinematics = comoving_kinematics(g, dg)
-  h_sq = jnp.maximum(kinematics.h_mean**2, _DENOM_FLOOR)
-  shear = kinematics.sigma_sq / h_sq
-  contraction = jnp.sum(jnp.maximum(0.0, -kinematics.h_dir) ** 2) / h_sq
-  gradient = jnp.sum(jnp.square(dg[:, :, 1:4]))
-  return shear, contraction, gradient
+  shear, contraction, gradient = cmb_fractions(metric_fn, coords)
+  return shear, contraction, gradient**2
 
 
 def efe_point_ratios(
@@ -97,8 +86,8 @@ def efe_point_ratios(
 def selection_terms(
   l_sn: float,
   cover_sq: float,
-  shear_ratio_sq: float,
-  contraction_ratio_sq: float,
+  shear_fraction: float,
+  contraction_fraction: float,
   gradient_sq: float,
   efe_rel_sq: float,
   wec_rel_sq: float,
@@ -108,8 +97,8 @@ def selection_terms(
   return {
     TERM_SN: l_sn,
     TERM_SN_COVER: cover_sq / SIGMA_Z**2,
-    TERM_SHEAR: shear_ratio_sq / cmb_var,
-    TERM_EXPAND: contraction_ratio_sq / cmb_var,
+    TERM_SHEAR: shear_fraction / cmb_var,
+    TERM_EXPAND: contraction_fraction / cmb_var,
     TERM_HOMOGENEITY: gradient_sq / cmb_var,
     TERM_EFE: efe_rel_sq / SIGMA_EFE**2,
     TERM_WEC: wec_rel_sq / SIGMA_WEC**2,

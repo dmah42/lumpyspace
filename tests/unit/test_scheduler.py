@@ -2,6 +2,10 @@ import jax.numpy as jnp
 
 from src.training.constraints import ConstraintManager
 from src.training.scheduler import (
+  GAMMA,
+  GAMMA_DOWN,
+  MAX_W,
+  START_W,
   AdaptivePenaltyState,
   PenaltyAction,
   create_geometric_sgdr_schedule,
@@ -10,8 +14,20 @@ from src.training.scheduler import (
 )
 
 
+def test_adaptive_penalty_state_starts_at_start_w():
+  assert AdaptivePenaltyState().w_penalty == START_W
+  assert AdaptivePenaltyState().w_min == START_W
+
+
+def test_constraint_manager_starting_at_sets_weight_and_floor():
+  manager = ConstraintManager.starting_at(10.0)
+  assert manager.scheduler.w_penalty == 10.0
+  assert manager.scheduler.w_min == 10.0
+  assert manager.lambda_val == 0.0
+
+
 def test_adaptive_penalty_state_bumps_when_stalled():
-  state = AdaptivePenaltyState(w_penalty=1.0)
+  state = AdaptivePenaltyState()
 
   # Step 0
   action = state.update(10.0, step=0, check_interval=5)
@@ -27,7 +43,7 @@ def test_adaptive_penalty_state_bumps_when_stalled():
   # Step 5: Check interval hit, first interval never bumps (last_check is inf)
   action = state.update(10.0, step=5, check_interval=5)
   assert action == PenaltyAction.STEADY
-  assert state.w_penalty == 1.0
+  assert state.w_penalty == START_W
   assert state.last_check_violation == 10.0
 
   # Step 6-9: Stall at 10.0
@@ -38,12 +54,12 @@ def test_adaptive_penalty_state_bumps_when_stalled():
   # Step 10: Second interval, now last_check=10.0, so it bumps!
   action = state.update(10.0, step=10, check_interval=5)
   assert action == PenaltyAction.BUMPED
-  assert state.w_penalty == 5.0
+  assert state.w_penalty == START_W * GAMMA
   assert state.last_check_violation == 10.0
 
 
 def test_adaptive_penalty_state_does_not_bump_when_improving():
-  state = AdaptivePenaltyState(w_penalty=1.0)
+  state = AdaptivePenaltyState()
   state.update(10.0, step=0, check_interval=5)
 
   # Dramatically improve violation to 1.0
@@ -52,18 +68,19 @@ def test_adaptive_penalty_state_does_not_bump_when_improving():
 
   action = state.update(1.0, step=5, check_interval=5)
   assert action == PenaltyAction.STEADY
-  assert state.w_penalty == 1.0
+  assert state.w_penalty == START_W
 
 
 def test_adaptive_penalty_state_decays_when_well_satisfied():
   # Start with an elevated penalty weight
-  state = AdaptivePenaltyState(w_penalty=10.0)
+  elevated = START_W * 10
+  state = AdaptivePenaltyState(w_penalty=elevated)
 
   # Step 0 to 20: Establish baseline at violation ~10.0
   for i in range(21):
     state.update(10.0, step=i, check_interval=20)
   assert state.last_check_violation == 10.0
-  assert state.w_penalty == 10.0
+  assert state.w_penalty == elevated
 
   # Steps 21-40: Violation drops dramatically to 0.1 (< 0.5 * 10.0)
   for i in range(21, 40):
@@ -71,11 +88,11 @@ def test_adaptive_penalty_state_decays_when_well_satisfied():
 
   action = state.update(0.1, step=40, check_interval=20)
   assert action == PenaltyAction.DECAYED
-  assert state.w_penalty == 5.0  # 10.0 / GAMMA_DOWN (2.0)
+  assert state.w_penalty == elevated / GAMMA_DOWN
 
 
 def test_adaptive_penalty_state_neutral_zone():
-  state = AdaptivePenaltyState(w_penalty=10.0)
+  state = AdaptivePenaltyState()
 
   # Step 0 to 20: Baseline at 10.0
   for i in range(21):
@@ -89,12 +106,12 @@ def test_adaptive_penalty_state_neutral_zone():
 
   action = state.update(8.0, step=40, check_interval=20)
   assert action == PenaltyAction.STEADY
-  assert state.w_penalty == 10.0
+  assert state.w_penalty == START_W
 
 
 def test_adaptive_penalty_state_respects_min_w():
-  # Start at minimum w_penalty = 1.0
-  state = AdaptivePenaltyState(w_penalty=1.0)
+  # Decay returns the weight to its starting pressure and never below it.
+  state = AdaptivePenaltyState(w_penalty=10.0, w_min=10.0)
 
   # Baseline at 10.0
   for i in range(21):
@@ -106,7 +123,17 @@ def test_adaptive_penalty_state_respects_min_w():
 
   action = state.update(0.01, step=40, check_interval=20)
   assert action == PenaltyAction.DECAYED
-  assert state.w_penalty == 1.0  # Clamped at MIN_W
+  assert state.w_penalty == 10.0
+
+
+def test_adaptive_penalty_state_respects_max_w():
+  # Three stalled checks take START_W past MAX_W, where it is held.
+  state = AdaptivePenaltyState()
+  actions = [state.update(10.0, step=i, check_interval=5) for i in range(0, 26)]
+
+  assert actions.count(PenaltyAction.BUMPED) == 4
+  assert START_W * GAMMA**2 < MAX_W < START_W * GAMMA**3
+  assert state.w_penalty == MAX_W
 
 
 def test_geometric_sgdr_schedule():
@@ -258,9 +285,9 @@ def test_constraint_manager_action_and_lambda():
   # Step 5: Check interval hit (first interval establishes baseline)
   action = manager.update(10.0, step=5, check_interval=5)
   assert action == PenaltyAction.STEADY
-  # lambda accumulated: 0.0 + 1.0 * 10.0 = 10.0
-  assert manager.lambda_val == 10.0
-  assert manager.scheduler.w_penalty == 1.0
+  # lambda accumulated: 0.0 + START_W * 10.0
+  assert manager.lambda_val == START_W * 10.0
+  assert manager.scheduler.w_penalty == START_W
 
   # Steps 6 to 9: Still stalled
   for i in range(6, 10):
@@ -269,14 +296,17 @@ def test_constraint_manager_action_and_lambda():
   # Step 10: Stalled violation triggers BUMPED
   action = manager.update(10.0, step=10, check_interval=5)
   assert action == PenaltyAction.BUMPED
-  assert manager.scheduler.w_penalty == 5.0
-  # lambda accumulated: 10.0 + 5.0 * 10.0 = 60.0
-  assert manager.lambda_val == 60.0
+  bumped = START_W * GAMMA
+  assert manager.scheduler.w_penalty == bumped
+  # lambda accumulated: START_W * 10.0 + bumped * 10.0
+  expected_lambda = START_W * 10.0 + bumped * 10.0
+  assert manager.lambda_val == expected_lambda
 
   # Serialization round-trip
-  restored = ConstraintManager.from_state(manager.to_state())
-  assert restored.lambda_val == 60.0
-  assert restored.scheduler.w_penalty == 5.0
+  restored = ConstraintManager.from_state(manager.to_state(), w_min=START_W)
+  assert restored.lambda_val == expected_lambda
+  assert restored.scheduler.w_penalty == bumped
+  assert restored.scheduler.w_min == START_W
   assert restored.scheduler.ema_violation == manager.scheduler.ema_violation
   assert (
     restored.scheduler.last_check_violation

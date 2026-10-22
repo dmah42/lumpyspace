@@ -30,6 +30,19 @@ CONSTRAINT_METRICS = (METRIC_WEC, METRIC_EXPAND, METRIC_SHEAR, METRIC_SPATIAL)
 
 PLANCK_RD_MPC = 147.09
 
+# CMB temperature anisotropy level, which bounds sigma/H, contraction/H and
+# metric perturbations at last scattering.
+CMB_ACCURACY = 1e-5
+
+# Expansion rates below this, in code units (~0.03 km/s/Mpc), count as zero
+# in the CMB fractions, which keeps them and their gradients bounded on
+# near-static geometry.
+H_FLOOR = 1e-4
+
+# Guard for the perturbation amplitude's square root, whose gradient is
+# infinite at zero.
+_GRADIENT_SQ_FLOOR = 1e-24
+
 
 def apply_spatial_weight(loss_val: jnp.ndarray, w: jnp.ndarray) -> jnp.ndarray:
   """Applies homoscedastic uncertainty weighting."""
@@ -217,35 +230,61 @@ def get_bao_loss(
   return jnp.mean(chi2_vals)
 
 
+def cmb_fractions(
+  metric_fn: Callable[[jnp.ndarray], jnp.ndarray],
+  coords: jnp.ndarray,
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+  """
+  The three CMB quantities at one point, in the dimensionless forms the CMB
+  constrains. Returns (shear, contraction, gradient):
+    shear:       sigma^2 / (H^2 + sigma^2), which is (sigma/H)^2 while the
+                 shear is small and approaches 1 when it dominates.
+    contraction: sum_i max(0, -H_i)^2 / sum_i H_i^2, the share of the squared
+                 directional expansion rates that is contraction, in [0, 1].
+    gradient:    sqrt(sum (d_k g_mu_nu)^2) over the three spatial derivatives,
+                 the metric perturbation amplitude per unit code length
+                 (~1 Gpc).
+  """
+  g = metric_fn(coords)
+
+  # Compute Jacobian to get time and spatial derivatives
+  # shape of jac_g: (4, 4, 4) -> (mu, nu, k) where k is the derivative index
+  jac_g = jax.jacfwd(metric_fn)(coords)
+
+  # Expansion and shear of the comoving matter, including the shift terms.
+  kinematics = comoving_kinematics(g, jac_g)
+  h_floor_sq = H_FLOOR**2
+
+  sigma_sq = jnp.maximum(kinematics.sigma_sq, 0.0)
+  shear = sigma_sq / (kinematics.h_mean**2 + sigma_sq + h_floor_sq)
+
+  contraction = jnp.sum(jnp.maximum(0.0, -kinematics.h_dir) ** 2) / (
+    jnp.sum(kinematics.h_dir**2) + h_floor_sq
+  )
+
+  gradient_sq = jnp.sum(jnp.square(jac_g[:, :, 1:4]))
+  gradient = jnp.sqrt(jnp.maximum(gradient_sq, _GRADIENT_SQ_FLOOR))
+
+  return shear, contraction, gradient
+
+
 def get_cmb_loss(
   model: MetricNN,
   coords: jnp.ndarray,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
   """
-  Computes the three CMB constraints at the deep past boundary.
+  Computes the three CMB constraints at the deep past boundary: Expansion,
+  Shear (Isotropy), and Spatial Homogeneity.
 
-  Expansion, Shear (Isotropy), and Spatial Homogeneity.
-  Returns raw loss values before Augmented Lagrangian weighting.
+  Each is a linear hinge on its fraction from cmb_fractions, at the CMB
+  accuracy: sigma/H and contraction/H up to 1e-5, so their squared fractions
+  up to 1e-10, and the perturbation amplitude up to 1e-5. Returns
+  (l_expand, l_shear, l_spatial) before Augmented Lagrangian weighting.
   """
-  g = model(coords)
+  shear, contraction, gradient = cmb_fractions(model, coords)
 
-  # Compute Jacobian to get time and spatial derivatives
-  # shape of jac_g: (4, 4, 4) -> (mu, nu, k) where k is the derivative index
-  jac_g = jax.jacfwd(model)(coords)
-
-  # Expansion and shear of the comoving matter, including the shift terms.
-  kinematics = comoving_kinematics(g, jac_g)
-
-  # 1. Expansion Penalty: Enforce expansion (no contraction) on all three axes
-  l_expand = jnp.sum(jnp.maximum(0.0, -kinematics.h_dir) ** 2)
-
-  # 2. Shear Penalty: max(0, sigma^2 - 1e-5)^2
-  l_shear = jnp.maximum(0.0, kinematics.sigma_sq - 1e-5) ** 2
-
-  # 3. Spatial Homogeneity Penalty
-  # sum over spatial derivatives (k=1,2,3) and all metric components
-  spatial_grads = jac_g[:, :, 1:4]
-  sum_spatial_grads_sq = jnp.sum(jnp.square(spatial_grads))
-  l_spatial = jnp.maximum(0.0, sum_spatial_grads_sq - 1e-5) ** 2
+  l_expand = jnp.maximum(0.0, contraction - CMB_ACCURACY**2)
+  l_shear = jnp.maximum(0.0, shear - CMB_ACCURACY**2)
+  l_spatial = jnp.maximum(0.0, gradient - CMB_ACCURACY)
 
   return l_expand, l_shear, l_spatial
