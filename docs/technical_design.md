@@ -858,6 +858,12 @@ for shear.
     $\approx 125$, so $H_{obs}$ rose to $\approx 0.011$, about 4% of $H_0$.
     `l_wec` has held at $\approx 1.05$ since step 600, through bumps to
     $w = 50$ (step 2000) and $w = 250$ (step 3000, $\lambda = 327$).
+    By step ~16,500 (best $S = 3.6 \times 10^6$) the WEC weight has sat at
+    the cap since step 7000 with $\lambda \approx 10^5$, and `l_wec` has
+    fallen to $\approx 0.36$. The largest drop, $0.6 \to 0.35$, came between
+    steps 13,000 and 15,000, when its own pressure barely changed and the
+    homogeneity and shear weights rose. $H_{obs}$ stopped rising at $\approx 0.034$ (14% of
+    $H_0$) around step 10,000.
   - **WEC outside the spatial weighting [FUTURE]:**
     - **Mechanism:** the WEC penalty is added to the EFE residual before
       the per-point homoscedastic weighting
@@ -875,15 +881,32 @@ for shear.
       data and CMB terms leaves $\approx 3$ for EFE and WEC together, against
       $\tfrac12 (1 + \ln 93) \approx 2.8$. At step 3000 the bump to
       $w = 250$, $\lambda = 327$ would add $\approx 270$ unweighted; the loss
-      rose from 13.4 to 17.8 and `l_wec` did not move. $W$ itself has not
-      been measured.
+      rose from 13.4 to 17.8 and `l_wec` did not move.
+    - **$W$ measured (best checkpoint, step 16,522):** $W$ is 3–6 over
+      almost all of the sampled domain at every integer $t$ from $-4$ to 1,
+      about 4.4 at the observer today, so the physics carries a factor
+      $\tfrac12 e^{-2W} \approx 10^{-3}$ to $10^{-6}$. It is a smooth tilt
+      across space that barely changes with $t$, with no feature at the
+      observer's curvature lump or the negative-$R$ patches: the network
+      suppresses regions, not points, which is why WEC moved at all. At
+      balance $L = e^{2W} \approx 3000$, far above the EFE residual
+      ($\approx 2 \times 10^{-3}$) and in the range of WEC's
+      $\lambda c$. Sharing the weighting with WEC, the EFE residual's share
+      of the gradient is divided by the same $L$, so the field equations are
+      suppressed wherever WEC dominates $L$, which with a smooth $W$ is
+      nearly everywhere.
     - **Change:** the per-point WEC penalty $\lambda c + \tfrac12 w c^2$ is
       averaged over the EFE points and added to the loss alongside the CMB
       penalties. The spatial weighting applies to the EFE residual alone.
-    - **Diagnostic:** the mean, maximum and spread of $W$ over the EFE
-      points, written each logged step to stdout or a sidecar log (outside
-      `training_metrics.csv`). The same suppression acts on the EFE
-      residual, and any change there waits on this measurement.
+    - **Diagnostic:** the spatial-weight row of the notebook's 2D maps
+      (cell `c82d99f1`), at every integer $t$, on the best and latest
+      checkpoints.
+    - **Prediction:** with WEC out, each point's $L$ is the EFE residual
+      alone, $\sim 10^{-3}$, and the balance point
+      $W = \tfrac12 \ln L$ is $\approx -3$. $W$ should fall from 3–6 to
+      below zero, weighting the field equations up. If $W$ stays high, the
+      mechanism above is wrong and the weighting comes off the EFE residual
+      as well.
     - **Resumption:** lands with a fresh run. A checkpoint's WEC state was
       accumulated under suppression, and applied unweighted it would
       dominate the loss.
@@ -895,8 +918,8 @@ for shear.
       starting weight rests partly on the expansion band, so this stage
       also shows whether the absolute density and coverage alone keep the
       model off Minkowski.
-    - WEC outside the spatial weighting, with the $W$ diagnostic, on a
-      fresh run.
+    - WEC outside the spatial weighting, on a fresh run, checked against
+      the $W$ prediction.
     - The expansion band joins the set on the same mechanism.
   - **Success Criterion:** every constraint carries force from step 0;
     $H_{obs}$ enters $[0.200, 0.267]$; the CMB shear and expansion fractions
