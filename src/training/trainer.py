@@ -34,11 +34,12 @@ from src.training.loss import (
   METRIC_SN_COVER,
   METRIC_SPATIAL,
   METRIC_WEC,
-  apply_spatial_weight,
+  augmented_lagrangian_penalty,
   get_bao_loss,
   get_cmb_loss,
   get_data_loss,
   get_efe_loss,
+  physics_loss,
 )
 from src.training.scheduler import (
   START_W,
@@ -264,10 +265,6 @@ def train_model(
     spatial_cmb = jax.random.uniform(k4, (50, 3), minval=-1.0, maxval=1.0)
     coords_cmb = jnp.concatenate([t_cmb, spatial_cmb], axis=1)
 
-    def get_al_penalty(loss_val, lam, w):
-      """Computes the Augmented Lagrangian penalty."""
-      return lam * loss_val + 0.5 * w * (loss_val**2)
-
     def loss_fn(model):
       # Compute matter density and Omega_m today in a single pass to avoid
       # redundant AD evaluations.
@@ -281,17 +278,16 @@ def train_model(
         coords
       )
 
-      # Compute point-wise Augmented Lagrangian penalty for WEC
-      al_penalty_raw_vals = get_al_penalty(
-        l_wec_raw_vals, lambdas["l_wec"], w_penalties["l_wec"]
+      # The 4D Spatial Curriculum weights the EFE residual point-wise; the WEC
+      # penalty sits outside it.
+      total_phys = physics_loss(
+        l_phys_raw_vals,
+        l_wec_raw_vals,
+        w_4d_vals,
+        w_efe,
+        lambdas["l_wec"],
+        w_penalties["l_wec"],
       )
-
-      # Total raw physics error per point
-      total_phys_raw_vals = w_efe * l_phys_raw_vals + al_penalty_raw_vals
-
-      # Apply the 4D Spatial Curriculum point-wise
-      weighted_phys_vals = apply_spatial_weight(total_phys_raw_vals, w_4d_vals)
-      total_weighted_phys = jnp.mean(weighted_phys_vals)
 
       # 1.5 CMB Boundary Penalties (Deep Past)
       v_cmb_loss = jax.vmap(lambda c: get_cmb_loss(model, c))
@@ -302,9 +298,13 @@ def train_model(
       l_spatial_cmb = jnp.mean(l_spatial_raw)
 
       cmb_penalty = (
-        get_al_penalty(l_expand, lambdas["l_expand"], w_penalties["l_expand"])
-        + get_al_penalty(l_shear, lambdas["l_shear"], w_penalties["l_shear"])
-        + get_al_penalty(
+        augmented_lagrangian_penalty(
+          l_expand, lambdas["l_expand"], w_penalties["l_expand"]
+        )
+        + augmented_lagrangian_penalty(
+          l_shear, lambdas["l_shear"], w_penalties["l_shear"]
+        )
+        + augmented_lagrangian_penalty(
           l_spatial_cmb, lambdas["l_spatial"], w_penalties["l_spatial"]
         )
       )
@@ -334,10 +334,10 @@ def train_model(
         operand=None,
       )
 
-      # Total Loss seamlessly integrates the spatially weighted physical errors
-      # (EFE + AL WEC) with the global data losses and CMB constraints.
+      # Total Loss combines the physics loss (spatially weighted EFE + AL WEC)
+      # with the global data losses and CMB constraints.
       total_loss = (
-        total_weighted_phys
+        total_phys
         + cmb_penalty
         + w_sn * l_sn
         + w_bao * l_bao

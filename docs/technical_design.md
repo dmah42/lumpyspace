@@ -470,26 +470,23 @@ for shear.
     `jnp.concatenate(..., axis=1)`, the two are currently forced to share one
     count, so the narrow-slice justification silently starves spatial
     coverage too. This risks under-sampling the localized curvature/shear
-    "lumps" that are the whole thesis of this project, and undermines the
-    feasibility-gate calibration (Task 4.9's `FEASIBILITY_EPS`), since that
-    gate checks raw per-step (non-EMA-smoothed) values that a thin N=50 draw
-    can make noisier than they should be.
+    "lumps" that are the whole thesis of this project, and adds noise to the
+    CMB loss terms and to the selection score (Task 4.13), whose shear,
+    expansion and homogeneity terms are means over the same 50 points,
+    redrawn every step.
   - **Implementation:** Either (a) raise `N_cmb` as a simple shared count
     (a moderate ~200 gives a real but modest noise reduction; matching
     `N=1000` fully matches EFE's spatial density at 20x the CMB compute), or
     (b) decouple the two axes structurally — e.g. broadcast/tile a small set
     of distinct time-locations across an independently-sized, larger spatial
     batch, instead of the current 1:1 pairing.
-  - **Caveat:** `l_wec` already uses `N=1000` and has still plateaued for
-    thousands of steps under growing AL pressure, suggesting its difficulty
-    is intrinsic (satisfying non-negativity across every sampled point
-    simultaneously) rather than a sampling-density artifact — so expect this
-    change to remove a plausible confound and make the feasibility gate more
-    trustworthy, not to obviously unlock compliance on its own.
+  - **Scope:** the CMB terms only. `l_wec` is evaluated on the `N=1000` EFE
+    points, and its plateau under growing AL pressure traced to the spatial
+    weighting absorbing its penalty (Task 4.14), not to sampling density.
   - **Success Criterion:** `l_spatial`'s achieved minimum and variance
-    measurably change (in either direction) at higher `N_cmb`, and/or the
-    feasibility gate's behavior becomes more stable across re-reads at the
-    same training state.
+    measurably change (in either direction) at higher `N_cmb`, and the
+    step-to-step spread of the score's CMB terms at a fixed training state
+    shrinks.
 
 - **Task 4.12: Unreachable-Redshift Defect & Observational Channel Rebuild
   [FUTURE]**
@@ -864,7 +861,7 @@ for shear.
     steps 13,000 and 15,000, when its own pressure barely changed and the
     homogeneity and shear weights rose. $H_{obs}$ stopped rising at $\approx 0.034$ (14% of
     $H_0$) around step 10,000.
-  - **WEC outside the spatial weighting [FUTURE]:**
+  - **WEC outside the spatial weighting [COMPLETED]:**
     - **Mechanism:** the WEC penalty is added to the EFE residual before
       the per-point homoscedastic weighting
       $\tfrac12 e^{-2W} L + W$ (section 5.7). The optimum
@@ -910,8 +907,22 @@ for shear.
     - **Resumption:** lands with a fresh run. A checkpoint's WEC state was
       accumulated under suppression, and applied unweighted it would
       dominate the loss.
+    - **Outcome:** the prediction held, so the weighting stays on the EFE
+      residual. $W$ was below zero from step 30 and fell to $-7$ to $-5.5$
+      at the best checkpoint (step 9719). `l_wec` fell from 0.6 to
+      $\approx 0.01$ at $w_0 = 10$ and to $2 \times 10^{-4}$ after its first
+      bump. The logged EFE fell without plateau and the loss had no spikes.
+  - **CMB shear and homogeneity at the cap (open):** in the same run the
+    shear fraction held at $5 \times 10^{-3}$ to $10^{-2}$ from step 3500 at
+    every weight, and the homogeneity term at $\approx 0.016$ from step
+    7000. Both escalated to `MAX_W` (shear at step 10,000, homogeneity at
+    11,000) without falling; with $\lambda$ rising by $\approx w c = 300$ per
+    check, their penalties came to dominate the loss, `l_sn` rose from 0.49
+    to 2–4 and `l_sn_cover` from $2 \times 10^{-5}$ to $\sim 10^{-2}$. The
+    success criterion below fails on this point. Task 4.15 changes the
+    homogeneity term's scale, so the diagnosis follows it.
   - **Sequencing:** stage one, then WEC outside the spatial weighting, then
-    the expansion band.
+    Tasks 4.15 and 4.16 together, then the expansion band.
     - Stage one: the violation measures, starting state, scheduler bounds
       and score terms for the four existing constraints, with a run to
       confirm that starting at $w_0$ trains stably. The case for a real
@@ -920,11 +931,167 @@ for shear.
       model off Minkowski.
     - WEC outside the spatial weighting, on a fresh run, checked against
       the $W$ prediction.
-    - The expansion band joins the set on the same mechanism.
+    - Observer scale normalisation (Task 4.15) and the luminosity distance
+      from the ray bundle (Task 4.16), on one fresh run. Until both land,
+      the supernova term compares the data with a coordinate distance, so
+      no run's metric can be read as a fit to the data.
+    - The expansion band joins the set on the same mechanism. Its edges are
+      fixed by local measurements. Landing it after Tasks 4.15 and 4.16
+      shows what the supernovae alone do to $H_{obs}$.
   - **Success Criterion:** every constraint carries force from step 0;
     $H_{obs}$ enters $[0.200, 0.267]$; the CMB shear and expansion fractions
     fall towards tolerance without any weight reaching `MAX_W`; `l_sn` holds
     a genuine fit with `l_sn_cover` at zero.
+
+- **Task 4.15: Observer Scale Normalisation, $a_0 = 1$ [FUTURE]**
+  - **Goal:** fix the overall spatial scale of the metric by the convention
+    $\det h = 1$ at the observer today, $(1, 0, 0, 0)$. One coordinate unit
+    is then 1 Gpc of proper length at the observer, and $\kappa\rho_0$ is the
+    observer's density today.
+  - **Problem:** nothing in the parameterisation or the loss fixes the
+    overall size of $g_{ij}$. Multiplying every proper spatial length by $c$,
+    $g \to S g S$ with $S = \mathrm{diag}(1, c, c, c)$, leaves $H$, the shear
+    fraction and the contraction fraction unchanged, multiplies $R$ by
+    $c^{-2}$ and the local density $\kappa\rho_0 / \sqrt{\det h}$ by
+    $c^{-3}$. The value of $a_0$ is a choice of units, and the code already
+    assumes $a_0 = 1$ in two places:
+    - Density (section 5.4): $\kappa\rho_0$ is the density where
+      $\det h = 1$. Its bounds bound the observer's density only when
+      $\det h_{obs} = 1$, and the reported $\Omega_m$ uses $\kappa\rho_0$.
+    - Distances: `get_luminosity_distance` returns $(1 + z)\,r$ with $r$ the
+      coordinate radius in Gpc, which is the flat FLRW $(1 + z)\,a_0 r$ at
+      $a_0 = 1$. Task 4.16 computes the distance from the ray bundle as a
+      proper length, and $a_0 = 1$ sets its unit: one code unit is 1 Gpc of
+      proper length at the observer.
+
+    Two loss terms reward a smaller overall scale:
+    - EFE: the residual is multiplied by $\gamma = \det g_{ij}$ (section 5.6),
+      so the trained mean square scales as $c^{8}$ while the unweighted
+      residual scales as $c^{-4}$.
+    - Homogeneity: $\sqrt{\sum (\partial_k g_{\mu\nu})^2}$ is not normalised
+      by the metric and scales roughly as $c$.
+  - **Measured:** the latest checkpoint of the WEC-outside-the-weighting run
+    (step 9390), rescaled by $c$ and evaluated on CPU at that checkpoint's
+    multipliers and weights (512 EFE points, 512 CMB points, 96 supernovae):
+
+    | $c$ | logged EFE | unweighted EFE | EFE + WEC term | CMB penalties | SN | total |
+    | --- | --- | --- | --- | --- | --- | --- |
+    | 0.8 | $4.5 \times 10^{-7}$ | 75.6 | $-6.01$ | 2.31 | 0.81 | $-2.89$ |
+    | 1.0 | $2.6 \times 10^{-6}$ | 30.0 | $-5.84$ | 2.58 | 0.71 | $-2.55$ |
+    | 1.25 | $1.6 \times 10^{-5}$ | 12.5 | $-4.63$ | 3.00 | 1.93 | $-0.30$ |
+
+    $H_{obs}$ is $0.0305$ at every $c$, and $R_{obs}$ scales exactly as
+    $c^{-2}$. The supernova term is lowest near the current scale, and the
+    total is still lower at $c = 0.8$. In training, $a$ at the observer has
+    fallen in every run with scale-factor plots: 0.73 at the part-5 best,
+    0.41 at the part-6 best, and 0.47, 0.30, 0.27 at steps 5129, 7770 and
+    9390 of the WEC run, while `l_sn` held near 0.5. At step 9390 the
+    observer's density is $\kappa\rho_0 / a^3 = 2.43$, 52 times the
+    ceiling; at the part-6 best it was about 14 times. $R\,a^2$ at the
+    observer stayed at 15–17 across these checkpoints: the curvature lump
+    there has the same proper geometry at each scale.
+  - **Change:** the normalisation is part of the metric. `MetricNN.__call__`
+    evaluates the raw network at the observer, takes
+    $s = (\det h_{obs})^{-1/6}$ and returns $S g S$ with
+    $S = \mathrm{diag}(1, s, s, s)$. This map takes $h \to s^2 h$, so
+    $\det h_{obs} = 1$ exactly, and a uniform rescaling of the raw output
+    leaves the returned metric unchanged. The factor is constant in the
+    coordinates, so the metric's coordinate derivatives carry it as a
+    constant and the Ricci evaluation adds one forward pass at the observer
+    and no derivative work. Section 4.1 builds the Lorentzian signature into
+    the parameterisation for the same reason: a convention enforced by a
+    penalty would be negotiable against the terms above.
+  - **Open:** with $a_0$ fixed, $\gamma$ is $(a / a_0)^6$, the relative
+    weighting of section 5.6, and the homogeneity term depends on the scale
+    through $a(t{=}{-4}) / a_0$. Both still favour a smaller $a / a_0$ away
+    from the observer, which is more expansion since that point and is
+    constrained by the supernova redshifts. The first run's $a(t)$ shows
+    whether that pull is material.
+  - **Tests:** $\det h = 1$ at $(1, 0, 0, 0)$ for a randomly initialised
+    model; scaling the raw network's spatial block by any $c$ leaves the
+    returned metric unchanged; an FLRW metric with $a(1) \neq 1$ is returned
+    with $a(1) = 1$ and the same $H(t)$; the signature stays $(-, +, +, +)$.
+  - **Resumption:** lands with Task 4.16 on a fresh run. Every existing
+    checkpoint has $a_0 \neq 1$, and normalising it changes its metric.
+  - **Success Criterion:** `a_mean` at $t = 1$ in the notebook reads 1;
+    the observer's density lies in $[\kappa\rho_b, \kappa\rho_m]$; the
+    logged EFE and the unweighted residual fall together.
+
+- **Task 4.16: Luminosity Distance from the Ray Bundle [FUTURE]**
+  - **Goal:** each supernova's $d_L$ is the model's own luminosity
+    distance, valid in any metric the network produces.
+  - **Problem:** `src/physics/geodesics.py` uses FLRW forms in four places.
+    They have been there since the ray tracer was written:
+    - Distance: `get_luminosity_distance` returns $(1 + z)$ times the
+      coordinate radius of the ray's endpoint, which is the flat FLRW $d_L$
+      at $a_0 = 1$. In any spacetime $d_L = (1 + z)^2 d_A$ (Etherington
+      reciprocity), and the area distance $d_A$ is set by the focusing and
+      shear of the ray bundle (the Sachs optical equations). Matter in the
+      beam focuses it through $R_{\mu\nu} k^\mu k^\nu$, and nearby structure
+      shears it through the Weyl tensor. The coordinate radius carries
+      neither, so inhomogeneity reaches the distances only through the
+      redshift and the ray's path.
+    - Redshift: `get_redshift` uses
+      $u_\mu = (-\sqrt{-g_{00}}, 0, 0, 0)$, which is the comoving observer
+      only when $g_{0i} = 0$. Comoving dust has
+      $u_\mu = g_{\mu 0} / \sqrt{-g_{00}}$, the 4-velocity the stress-energy
+      tensor and the kinematics already use.
+    - Sky direction: `make_null_direction` uses the RA/Dec unit vector as a
+      coordinate direction at the observer. That vector is a direction on
+      the sky only when $h_{obs}$ is isotropic.
+    - BAO: `get_bao_distances` takes $D_M$ as the coordinate radius and
+      $D_H$ as $1/H$ at the spatial origin at the source's time. `l_bao`
+      logs 0 in current runs.
+
+    Task 3.3 verifies the ray tracer against FLRW, where the coordinate
+    form is exact, so it passes by construction.
+  - **Measured:** the WEC run's best checkpoint (step 9719) has
+    $a_0 = 0.262$ and $R \approx 240$ at the observer. Near the observer its
+    proper distances are $a_0$ times the coordinate ones, about 3 magnitudes
+    in $\mu$, before any focusing by that curvature. Every run's supernova
+    fit, including that run's $\chi^2/N \approx 0.5$, is a fit of the
+    coordinate form.
+  - **Change:**
+    - Observer frame: an orthonormal tetrad at $(1, 0, 0, 0)$ with
+      $e_0 = u$, the comoving 4-velocity, and a spatial triad orthonormal
+      in $h_{obs}$. RA/Dec give the direction $n$ in that triad, and the
+      initial null vector $k = u + n$ (past-directed) has unit frequency,
+      $-u \cdot k = 1$, for the observer.
+    - Jacobi map: $J = \partial x^\mu / \partial \theta^A$, the derivative
+      of the ray's position with respect to two angles $\theta^A$ on the
+      observer's sky about $n$, taken by forward-mode differentiation
+      through the integrator. It costs two tangent directions, about two to
+      three times the current ray tracing, and needs no Riemann tensor.
+    - Area distance: $J$ projected onto an orthonormal screen basis at the
+      source, orthogonal to $k$ and to the source's comoving $u$, gives a
+      $2 \times 2$ matrix with $d_A = \sqrt{|\det J_{screen}|}$. Then
+      $d_L = (1 + z)^2 d_A$ in code units of Gpc.
+    - Redshift: $1 + z = (u \cdot k)_{src} / (u \cdot k)_{obs}$ with the
+      comoving $u_\mu$, shift included.
+    - BAO: $D_M = (1 + z)\,d_A$ along each ray, when `l_bao` is enabled.
+  - **Interactions:**
+    - With Task 4.15: $d_A$ is a proper length, so a uniform rescaling of
+      $g_{ij}$ changes every $d_L$ and the supernovae measure the scale. The
+      convention $a_0 = 1$ fixes the unit, and the density bound needs it in
+      any case.
+    - With the expansion band: as $z \to 0$, $d_A \to z / H$ at the observer
+      (Kristian–Sachs, sky-averaged), so the low-redshift supernovae
+      constrain the observer's expansion directly. The band's edges are
+      local measurements and stay fixed.
+  - **Diagnostic:** the supernova $\chi^2$ of the WEC run's best checkpoint
+    under the new distance measures how far that fit was from the model's
+    own luminosity distances.
+  - **Tests:**
+    - Flat FLRW with $a(1) = 1$: $d_L$ matches the analytic value for
+      $z \in [0.01, 2.3]$ to the ODE tolerance.
+    - A constant anisotropic $h$ at the observer, from a linear change of
+      spatial coordinates, leaves $d_L$ and $z$ unchanged in every sky
+      direction.
+    - FLRW written with a shift by the change of coordinates
+      $x \to x - v t$ gives the same $z$ and $d_L$ as without it.
+  - **Resumption:** lands with Task 4.15 on a fresh run.
+  - **Success Criterion:** the three tests pass, and `l_sn` is computed from
+    the area distance in training.
 
 ---
 
@@ -1187,7 +1354,7 @@ Using the homoscedastic uncertainty formulation _per-point_:
 
 $$\mathcal{L}_{phys} = \frac{1}{N} \sum_{i=1}^N \left( \frac{1}{2} e^{-2 W(t_i)} \cdot \mathcal{L}_{residual}(t_i) + W(t_i) \right)$$
 
-1. **Dynamic Suppression:** If the WEC or EFE residual is massive at a specific
+1. **Dynamic Suppression:** If the EFE residual is massive at a specific
    boundary $t=-3.5$, the optimizer will locally increase $W(-3.5)$ to suppress
    that stiff gradient.
 2. **Spatial Curriculum Learning:** By suppressing the hardest coordinate
@@ -1195,6 +1362,14 @@ $$\mathcal{L}_{phys} = \frac{1}{N} \sum_{i=1}^N \left( \frac{1}{2} e^{-2 W(t_i)}
    the easy regions converge, their gradients drop, and the network can slowly
    decrease $W(t)$ in the hard regions to tackle them sequentially, acting as a
    completely automated spatial curriculum.
+
+$\mathcal{L}_{residual}$ is the EFE residual alone, scaled by `w_efe`. The WEC
+Augmented Lagrangian penalty is averaged over the same points and added outside
+the weighting (`physics_loss` in `src/training/loss.py`): the optimal
+$W = \tfrac12 \ln \mathcal{L}$ makes the weighted gradient
+$\tfrac12 \partial \ln \mathcal{L}$, which no constant multiple of
+$\mathcal{L}$ changes, so inside the weighting the penalty's weight and
+multiplier would have no effect (Task 4.14).
 
 #### Architectural Implementation Details
 

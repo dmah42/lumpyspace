@@ -6,9 +6,12 @@ import jax
 import jax.numpy as jnp
 
 from src.training.loss import (
+  apply_spatial_weight,
+  augmented_lagrangian_penalty,
   get_bao_loss,
   get_data_loss,
   get_efe_loss,
+  physics_loss,
 )
 
 # Enable float64 for high-precision physics checks
@@ -370,3 +373,64 @@ def test_efe_loss_handles_collapsing_lapse(monkeypatch):
 
   assert jnp.isfinite(raw_residual_loss)
   assert jnp.isfinite(wec_penalty_raw)
+
+
+def test_augmented_lagrangian_penalty():
+  # lam * c + w / 2 * c^2, and zero for a satisfied constraint.
+  c = jnp.array([0.0, 0.5, 2.0])
+  penalty = augmented_lagrangian_penalty(c, jnp.array(3.0), jnp.array(10.0))
+
+  assert jnp.allclose(penalty, jnp.array([0.0, 1.5 + 1.25, 6.0 + 20.0]))
+
+
+def _physics_inputs():
+  efe = jnp.array([1e-3, 4e-3, 2e-3])
+  wec = jnp.array([0.0, 0.3, 1.2])
+  return efe, wec
+
+
+def test_physics_loss_weights_only_the_efe_residual():
+  efe, wec = _physics_inputs()
+  spatial = jnp.array([0.5, -1.0, 2.0])
+  lam, w = jnp.array(4.0), jnp.array(10.0)
+
+  loss = physics_loss(efe, wec, spatial, 2.0, lam, w)
+
+  expected = jnp.mean(apply_spatial_weight(2.0 * efe, spatial)) + jnp.mean(
+    augmented_lagrangian_penalty(wec, lam, w)
+  )
+  assert jnp.allclose(loss, expected)
+
+
+def test_physics_loss_wec_term_ignores_the_spatial_weight():
+  # The WEC penalty sits outside the weighting: changing W changes the loss
+  # only through the EFE term, and the WEC gradient does not depend on W.
+  efe, wec = _physics_inputs()
+  lam, w = jnp.array(4.0), jnp.array(10.0)
+  low = jnp.zeros(3)
+  high = jnp.full(3, 5.0)
+
+  def wec_part(spatial):
+    return physics_loss(efe, wec, spatial, 2.0, lam, w) - jnp.mean(
+      apply_spatial_weight(2.0 * efe, spatial)
+    )
+
+  assert jnp.allclose(wec_part(low), wec_part(high))
+
+  def grad_wec(spatial):
+    return jax.grad(lambda c: physics_loss(efe, c, spatial, 2.0, lam, w))(wec)
+
+  assert jnp.allclose(grad_wec(low), grad_wec(high))
+
+
+def test_physics_loss_wec_multiplier_acts_in_full():
+  # Raising lambda raises the loss by exactly mean(delta_lambda * c), with no
+  # spatial weight in the way.
+  efe, wec = _physics_inputs()
+  spatial = jnp.full(3, 4.0)
+  w = jnp.array(10.0)
+
+  base = physics_loss(efe, wec, spatial, 2.0, jnp.array(1.0), w)
+  raised = physics_loss(efe, wec, spatial, 2.0, jnp.array(1001.0), w)
+
+  assert jnp.allclose(raised - base, 1000.0 * jnp.mean(wec))

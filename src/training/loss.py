@@ -49,6 +49,39 @@ def apply_spatial_weight(loss_val: jnp.ndarray, w: jnp.ndarray) -> jnp.ndarray:
   return 0.5 * jnp.exp(-2.0 * w) * loss_val + w
 
 
+def augmented_lagrangian_penalty(
+  violation: jnp.ndarray, lam: jnp.ndarray, w: jnp.ndarray
+) -> jnp.ndarray:
+  """The Augmented Lagrangian penalty lam * c + w / 2 * c^2 on violation c."""
+  return lam * violation + 0.5 * w * violation**2
+
+
+def physics_loss(
+  efe_residuals: jnp.ndarray,
+  wec_violations: jnp.ndarray,
+  spatial_weights: jnp.ndarray,
+  w_efe: float,
+  lambda_wec: jnp.ndarray,
+  w_wec: jnp.ndarray,
+) -> jnp.ndarray:
+  """
+  Field-equation and weak energy condition loss over the EFE points.
+
+  The spatial weighting applies to the field-equation residual alone. The WEC
+  Augmented Lagrangian penalty is averaged over the points outside it: inside
+  the weighting the optimal W = 1/2 ln L rises with L, and the gradient
+  1/2 d(ln L) is unchanged by any constant multiple of L, so the penalty's
+  weight and multiplier would have no effect (Task 4.14).
+  """
+  weighted_efe = jnp.mean(
+    apply_spatial_weight(w_efe * efe_residuals, spatial_weights)
+  )
+  wec_penalty = jnp.mean(
+    augmented_lagrangian_penalty(wec_violations, lambda_wec, w_wec)
+  )
+  return weighted_efe + wec_penalty
+
+
 class EfeDiagnostics(NamedTuple):
   """Per-point field-equation quantities for the selection score."""
 
