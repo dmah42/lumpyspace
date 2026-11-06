@@ -943,7 +943,7 @@ for shear.
     fall towards tolerance without any weight reaching `MAX_W`; `l_sn` holds
     a genuine fit with `l_sn_cover` at zero.
 
-- **Task 4.15: Observer Scale Normalisation, $a_0 = 1$ [FUTURE]**
+- **Task 4.15: Observer Scale Normalisation, $a_0 = 1$ [COMPLETED]**
   - **Goal:** fix the overall spatial scale of the metric by the convention
     $\det h = 1$ at the observer today, $(1, 0, 0, 0)$. One coordinate unit
     is then 1 Gpc of proper length at the observer, and $\kappa\rho_0$ is the
@@ -1005,8 +1005,9 @@ for shear.
     weighting of section 5.6, and the homogeneity term depends on the scale
     through $a(t{=}{-4}) / a_0$. Both still favour a smaller $a / a_0$ away
     from the observer, which is more expansion since that point and is
-    constrained by the supernova redshifts. The first run's $a(t)$ shows
-    whether that pull is material.
+    constrained by the supernova redshifts. Whether the logged EFE and the
+    unweighted residual fall together shows whether that pull is material,
+    and Task 4.17 acts on the result.
   - **Tests:** $\det h = 1$ at $(1, 0, 0, 0)$ for a randomly initialised
     model; scaling the raw network's spatial block by any $c$ leaves the
     returned metric unchanged; an FLRW metric with $a(1) \neq 1$ is returned
@@ -1014,10 +1015,9 @@ for shear.
   - **Resumption:** lands with Task 4.16 on a fresh run. Every existing
     checkpoint has $a_0 \neq 1$, and normalising it changes its metric.
   - **Success Criterion:** `a_mean` at $t = 1$ in the notebook reads 1;
-    the observer's density lies in $[\kappa\rho_b, \kappa\rho_m]$; the
-    logged EFE and the unweighted residual fall together.
+    the observer's density lies in $[\kappa\rho_b, \kappa\rho_m]$.
 
-- **Task 4.16: Luminosity Distance from the Ray Bundle [FUTURE]**
+- **Task 4.16: Luminosity Distance from the Ray Bundle [COMPLETED]**
   - **Goal:** each supernova's $d_L$ is the model's own luminosity
     distance, valid in any metric the network produces.
   - **Problem:** `src/physics/geodesics.py` uses FLRW forms in four places.
@@ -1096,11 +1096,28 @@ for shear.
     - A constant anisotropic $h$ at the observer, from a linear change of
       spatial coordinates, leaves $d_L$ and $z$ unchanged in every sky
       direction.
-    - FLRW written with a shift by the change of coordinates
-      $x \to x - v t$ gives the same $z$ and $d_L$ as without it.
+    - FLRW resliced by $t = t' - c\,x$, which keeps every comoving worldline
+      and gives the metric a shift, gives the same $z$ and $d_L$ as without
+      it.
   - **Resumption:** lands with Task 4.15 on a fresh run.
   - **Success Criterion:** the three tests pass, and `l_sn` is computed from
     the area distance in training.
+
+- **Task 4.17: Scale-Independent Residual Weighting [FUTURE, conditional]**
+  - **Goal:** the EFE and homogeneity terms give no reward for a smaller
+    $a / a_0$ away from the observer.
+  - **Trigger:** the measurement in Task 4.15's open item. On checkpoints
+    of the first run with Tasks 4.15 and 4.16, evaluate the EFE residual
+    over the collocation points with and without $\gamma$. If both fall
+    together, the pull is immaterial and this task closes unused. If the
+    logged EFE falls while the unweighted residual holds or rises, the
+    model is lowering the trained number through $a / a_0$, and the task
+    goes ahead.
+  - **Change:** decided by which term carries the pull: the $\gamma$
+    weighting of section 5.6, the homogeneity term's dependence on the
+    metric's scale, or both.
+  - **Success Criterion:** the logged EFE and the unweighted residual fall
+    together.
 
 ---
 
