@@ -1053,22 +1053,31 @@ for shear.
     coordinate form.
   - **Change:**
     - Observer frame: an orthonormal tetrad at $(1, 0, 0, 0)$ with
-      $e_0 = u$, the comoving 4-velocity, and a spatial triad orthonormal
-      in $h_{obs}$. RA/Dec give the direction $n$ in that triad, and the
-      initial null vector $k = u + n$ (past-directed) has unit frequency,
-      $-u \cdot k = 1$, for the observer.
-    - Jacobi map: $J = \partial x^\mu / \partial \theta^A$, the derivative
-      of the ray's position with respect to two angles $\theta^A$ on the
-      observer's sky about $n$, taken by forward-mode differentiation
-      through the integrator. It costs two tangent directions, about two to
-      three times the current ray tracing, and needs no Riemann tensor.
-    - Area distance: $J$ projected onto an orthonormal screen basis at the
-      source, orthogonal to $k$ and to the source's comoving $u$, gives a
-      $2 \times 2$ matrix with $d_A = \sqrt{|\det J_{screen}|}$. Then
-      $d_L = (1 + z)^2 d_A$ in code units of Gpc.
+      $e_0 = u$, the comoving 4-velocity, and the spatial triad $L^{-T}$
+      from the Cholesky factor $h_{obs} = L L^T$, which lies along the
+      coordinate axes when $h_{obs}$ is isotropic. RA/Dec give the unit
+      vector $m$ towards the source, orthogonal to $u$, and the initial null
+      vector $k = u - m$ has unit frequency, $-u \cdot k = 1$, for the
+      observer (`make_null_direction`).
+    - Jacobi map: two deviation vectors $\xi_A$ ride alongside the ray, one
+      for each of two orthogonal angles $\theta^A$ on the observer's sky
+      about the source. Each starts at zero with rate
+      $\partial k / \partial \theta^A$ and evolves by the geodesic flow
+      linearised about the ray (`jax.linearize`), which is the geodesic
+      deviation equation in coordinates. The curvature enters through the
+      derivatives of the Christoffel symbols, so no Riemann tensor is
+      formed. The state grows from 8 to 24 components.
+    - Area distance: on the screen at each point, the 2-plane orthogonal to
+      the comoving $u$ and to the ray's direction $d$ in $u$'s rest frame,
+      the deviations have inner products
+      $G_{AB} = \xi_A \cdot \xi_B + (u \cdot \xi_A)(u \cdot \xi_B) - (d \cdot \xi_A)(d \cdot \xi_B)$,
+      and $d_A^2 = \sqrt{\det G}$ (`area_distance`). Then
+      $d_L = (1 + z)^2 d_A$ in code units of Gpc. A lumpy metric's $d_L$
+      need not be monotonic, so states past the end of a ray carry its last
+      finite distance.
     - Redshift: $1 + z = (u \cdot k)_{src} / (u \cdot k)_{obs}$ with the
       comoving $u_\mu$, shift included.
-    - BAO: $D_M = (1 + z)\,d_A$ along each ray, when `l_bao` is enabled.
+    - BAO: $D_M = (1 + z)\,d_A$ along each ray. $D_H$ keeps its form.
   - **Interactions:**
     - With Task 4.15: $d_A$ is a proper length, so a uniform rescaling of
       $g_{ij}$ changes every $d_L$ and the supernovae measure the scale. The
@@ -1272,7 +1281,9 @@ remove its matter by not expanding.
   shifted-softplus bounds introduced.
 - **Dilution:** comoving dust conserves $\rho\sqrt{\det h}$, with
   $h_{ij} = g_{ij} - g_{0i}g_{0j}/g_{00}$ the spatial metric in its own rest
-  frame, so the local density is $\kappa\rho_0/\sqrt{\det h}$.
+  frame, so the local density is $\kappa\rho_0/\sqrt{\det h}$. The metric
+  is normalised to $\det h = 1$ at the observer today (Task 4.15), so
+  $\kappa\rho_0$ is the observer's density and its bounds apply there.
 - **Reported:** $\Omega_m = \kappa\rho_0 / 3H_{mean}(t{=}1)^2$, derived at the
   model's own expansion rate. It runs far outside $[0, 1]$ while $H$ is
   unphysical.

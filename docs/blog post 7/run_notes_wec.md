@@ -6,10 +6,6 @@ CMB fractions, per-constraint starting weights and floors, absolute
 $\kappa\rho_0$). The run went 12,800 steps. The best checkpoint is step 9719
 ($S = 2.33 \times 10^7$).
 
-Checkpoints (best and latest), the training and penalty-event logs, and the
-rescaling check (`scale_check.py` and its output) are kept in
-`checkpoints/run_wec_outside_weighting/`, which git ignores.
-
 ## Figures
 
 All `lumpyspace7_wec_*` images are from this run. The loss chart covers the
@@ -116,7 +112,7 @@ evaluated at the checkpoint's multipliers and weights. The sample was 512
 EFE points, 512 CMB points and 96 supernovae.
 
 | c | logged EFE | unweighted EFE | EFE + WEC term | CMB penalties | SN | total | a_obs | H_obs | R_obs | κρ_obs |
-|---|---|---|---|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 0.8 | 4.5e-7 | 75.6 | −6.01 | 2.31 | 0.81 | −2.89 | 0.214 | 0.0305 | 361 | 4.75 |
 | 0.9 | 1.1e-6 | 46.1 | −5.97 | 2.44 | 1.22 | −2.31 | 0.241 | 0.0305 | 285 | 3.34 |
 | 1.0 | 2.6e-6 | 30.0 | −5.84 | 2.58 | 0.71 | −2.55 | 0.268 | 0.0305 | 231 | 2.43 |
@@ -174,7 +170,54 @@ These have been in the ray tracer since it was written (2f9d33a, 2026-05-16).
   observer. That is exact only if h there is isotropic.
 - **BAO:** $D_M$ is the coordinate radius, and $D_H$ is 1/H at the spatial
   origin at the source's time. `l_bao` is 0 in this run.
-- **Possible fix (not yet in the design doc):** the Jacobi map from
-  forward-mode derivatives of the traced ray with respect to its initial
-  sky angles. Then $d_A = \sqrt{|\det J_{screen}|}$ and
-  $d_L = (1+z)^2 d_A$.
+- **The fix (Task 4.16):** two deviation vectors integrated alongside each
+  ray give the area distance $d_A$, and $d_L = (1+z)^2 d_A$.
+
+### Cost of the bundle ray tracer
+
+Training with the Task 4.16 ray tracer runs at far fewer steps per hour.
+The extra work is in tracing the supernovae:
+
+- **Second derivatives at every solver step.** The deviation vectors evolve
+  under the geodesic flow linearised about the ray. That needs the
+  derivatives of the Christoffel symbols, so second derivatives of the
+  network, at every evaluation of the right-hand side. Each ray carries 24
+  components (the ray and two deviation vectors), where the ray alone is 8.
+- **The backward pass repeats it.** Training differentiates through the
+  integration, so the reverse pass runs through the second-derivative work
+  and the larger state.
+- **Smaller steps.** The adaptive step controller bounds the error on the
+  deviation vectors as well as on the ray. They change fastest where the
+  curvature is strong, such as the peak at the observer, so the solver
+  takes smaller steps there.
+- **The slowest ray sets the pace.** The supernovae are traced in parallel,
+  and the batch waits for the ray that needs the most steps.
+- **The observer normalisation (Task 4.15)** evaluates the network at the
+  observer inside each metric call. Within the nested derivatives of a
+  solver step this adds a few small forward passes, which is minor next to
+  the items above.
+
+### The best checkpoint under the model's own luminosity distance
+
+This is the Task 4.16 diagnostic. The step-9719 checkpoint was scored on
+GPU against all 1701 Pantheon+ supernovae. The metric is the network's
+metric as trained, before scale normalisation.
+The distance is $d_L = (1+z)^2 d_A$, and the redshift is the comoving one,
+with the shift included.
+
+- **Reached:** 1673 of 1701 supernovae. The run had almost all reached.
+- **Fit:** χ²/N = 204, against 0.49 logged at that step.
+- **Offset:** $\mu_{pred} - \mu$ has median −3.0 mag and spread 0.52 mag
+  (Pantheon+ errors are about 0.15). The offset is close to constant in
+  redshift:
+
+  | z | n | median Δμ |
+  | --- | --- | --- |
+  | < 0.03 | 472 | −2.96 |
+  | 0.03–0.1 | 269 | −3.09 |
+  | 0.1–0.5 | 750 | −3.03 |
+  | 0.5–1.0 | 177 | −2.43 |
+
+  $5 \log_{10} a_0 = 5 \log_{10} 0.262 = -2.9$: almost all of the offset
+  is the shrunken spatial scale, which the coordinate-radius distance could
+  not see.

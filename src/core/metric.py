@@ -9,7 +9,11 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 
-from src.core.kinematics import comoving_kinematics
+from src.core.kinematics import comoving_kinematics, comoving_spatial_metric
+
+# The observer today. The spatial scale is normalised so that det h = 1 here
+# (Task 4.15).
+OBSERVER_COORDS = jnp.array([1.0, 0.0, 0.0, 0.0])
 
 # Absolute matter densities today, in kg/m^3.
 # Baryons: Big Bang nucleosynthesis fixes the baryon-to-photon ratio from
@@ -133,10 +137,10 @@ class MetricNN(eqx.Module):
   def get_cosmology_today(self) -> tuple[jnp.ndarray, jnp.ndarray]:
     """
     Returns (kappa_rho_0, omega_m) today computed in a single pass.
+    det h = 1 at the observer, so kappa_rho_0 is the observer's density today.
     """
-    coords_today = jnp.array([1.0, 0.0, 0.0, 0.0])
-    g = self(coords_today)
-    dg = jax.jacfwd(lambda c: self(c))(coords_today)
+    g = self(OBSERVER_COORDS)
+    dg = jax.jacfwd(lambda c: self(c))(OBSERVER_COORDS)
     h_mean_today = comoving_kinematics(g, dg).h_mean
 
     kappa_rho_0 = KAPPA_RHO_BARYON * jnp.exp(self.kappa_rho_0_raw)
@@ -148,7 +152,18 @@ class MetricNN(eqx.Module):
 
   def __call__(self, coords: jnp.ndarray) -> jnp.ndarray:
     """
-    Computes the metric components at given coordinates.
+    Computes the metric components at given coordinates, with the spatial
+    scale normalised to det h = 1 at the observer today. The normalisation
+    depends on the network alone, so it is computed once under vmap and
+    jacfwd over coordinates.
+    """
+    return normalise_observer_scale(
+      self._network_metric(coords), self._network_metric(OBSERVER_COORDS)
+    )
+
+  def _network_metric(self, coords: jnp.ndarray) -> jnp.ndarray:
+    """
+    The network's metric before scale normalisation.
     Ensures Lorentzian signature (-, +, +, +) via exponentiation.
     """
     # Clip coordinates to prevent singularities in random metrics during early
@@ -182,6 +197,19 @@ class MetricNN(eqx.Module):
     )
 
     return metric
+
+
+def normalise_observer_scale(g: jnp.ndarray, g_obs: jnp.ndarray) -> jnp.ndarray:
+  """
+  Fixes the overall spatial scale by the convention a_0 = 1: det h = 1 at the
+  observer, where g_obs is the metric. Returns S g S with
+  S = diag(1, s, s, s) and s = det(h_obs)^(-1/6), which takes h to s^2 h.
+  One coordinate unit is then one unit of proper length at the observer, and
+  a uniform rescaling of the spatial lengths leaves the result unchanged.
+  """
+  s = jnp.linalg.det(comoving_spatial_metric(g_obs)) ** (-1.0 / 6.0)
+  scale = jnp.array([1.0, s, s, s])
+  return g * jnp.outer(scale, scale)
 
 
 def get_metric_fn(model: MetricNN) -> Callable[[jnp.ndarray], jnp.ndarray]:

@@ -7,12 +7,14 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from src.core.kinematics import comoving_kinematics
+from src.core.kinematics import comoving_kinematics, comoving_spatial_metric
 from src.core.metric import (
   KAPPA_RHO_BARYON,
   KAPPA_RHO_MATTER,
+  OBSERVER_COORDS,
   MetricNN,
   clip_matter_density,
+  normalise_observer_scale,
 )
 
 
@@ -111,3 +113,77 @@ def test_clip_matter_density_keeps_baryons_to_total_matter(raw, expected):
   if expected is None:
     expected = KAPPA_RHO_BARYON * float(jnp.exp(raw))
   assert kappa_rho_0[0] == pytest.approx(expected, rel=1e-5)
+
+
+def _flrw_metric(coords, a_today=1.0, h=0.5):
+  a = a_today * jnp.exp(h * (coords[0] - 1.0))
+  return jnp.diag(jnp.array([-1.0, a**2, a**2, a**2]))
+
+
+def _lumpy_metric(coords):
+  """A metric with lapse, shift and anisotropy, varying in space and time."""
+  t, x, y, z = coords
+  return jnp.array(
+    [
+      [-1.0 - 0.1 * x, 0.05 * t, 0.02 * y, 0.0],
+      [0.05 * t, 2.0 + 0.1 * t, 0.1, 0.05 * z],
+      [0.02 * y, 0.1, 1.5 + 0.2 * x, 0.0],
+      [0.0, 0.05 * z, 0.0, 0.7 + 0.1 * t * t],
+    ]
+  )
+
+
+def test_model_has_unit_spatial_volume_at_the_observer():
+  model = MetricNN(jax.random.PRNGKey(3))
+
+  h_obs = comoving_spatial_metric(model(OBSERVER_COORDS))
+
+  assert float(jnp.linalg.det(h_obs)) == pytest.approx(1.0, rel=1e-5)
+
+
+@pytest.mark.parametrize("c", [0.3, 2.5])
+def test_normalisation_ignores_a_uniform_spatial_rescaling(c):
+  scale = jnp.array([1.0, c, c, c])
+  rescale = jnp.outer(scale, scale)
+  coords = jnp.array([-1.5, 0.3, -0.2, 0.4])
+
+  normalised = normalise_observer_scale(
+    _lumpy_metric(coords), _lumpy_metric(OBSERVER_COORDS)
+  )
+  rescaled = normalise_observer_scale(
+    _lumpy_metric(coords) * rescale, _lumpy_metric(OBSERVER_COORDS) * rescale
+  )
+
+  assert jnp.allclose(rescaled, normalised, rtol=1e-5)
+
+
+def test_normalisation_sets_flrw_scale_factor_today_and_keeps_h():
+  def normalised(c):
+    return normalise_observer_scale(
+      _flrw_metric(c, a_today=2.0), _flrw_metric(OBSERVER_COORDS, a_today=2.0)
+    )
+
+  a_today = jnp.linalg.det(normalised(OBSERVER_COORDS)[1:4, 1:4]) ** (1 / 6)
+  assert float(a_today) == pytest.approx(1.0, rel=1e-5)
+
+  for t in [-3.0, 0.0, 1.0]:
+    coords = jnp.array([t, 0.0, 0.0, 0.0])
+    h_normalised = comoving_kinematics(
+      normalised(coords), jax.jacfwd(normalised)(coords)
+    ).h_mean
+    h_raw = comoving_kinematics(
+      _flrw_metric(coords, a_today=2.0),
+      jax.jacfwd(lambda c: _flrw_metric(c, a_today=2.0))(coords),
+    ).h_mean
+    assert float(h_normalised) == pytest.approx(float(h_raw), rel=1e-5)
+    assert float(h_normalised) == pytest.approx(0.5, rel=1e-5)
+
+
+def test_normalised_metric_keeps_the_lorentzian_signature():
+  model = MetricNN(jax.random.PRNGKey(5))
+  coords = jnp.array([-2.0, 0.5, -0.5, 0.25])
+
+  eigenvalues = jnp.linalg.eigvalsh(model(coords))
+
+  assert int(jnp.sum(eigenvalues < 0)) == 1
+  assert int(jnp.sum(eigenvalues > 0)) == 3

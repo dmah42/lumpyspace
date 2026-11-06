@@ -6,7 +6,14 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from src.physics.geodesics import L_UNIT, geodesic_system, get_bao_distances
+from src.core.kinematics import comoving_four_velocity
+from src.physics.geodesics import (
+  L_UNIT,
+  _trace_bundle,
+  geodesic_system,
+  get_bao_distances,
+  make_null_direction,
+)
 
 # Enable float64 for high-precision physics checks
 jax.config.update("jax_enable_x64", True)
@@ -187,3 +194,94 @@ def test_bao_isotropy_on_flrw_metric():
   assert jnp.allclose(
     dh, 2.0 * L_UNIT, atol=1e-1
   ), f"Expected D_H ~ {2.0 * L_UNIT}, got {dh}"
+
+
+# Flat FLRW with a(t) = exp(H (t - 1)), so a = 1 today. Its luminosity
+# distance is dL = z (1 + z) / H.
+_HUBBLE = 0.5
+
+
+def _flat_flrw(coords):
+  a = jnp.exp(_HUBBLE * (coords[0] - 1.0))
+  return jnp.diag(jnp.array([-1.0, a**2, a**2, a**2]))
+
+
+def _assert_flrw_luminosity_distance(metric_fn, direction):
+  """dL along the traced ray matches flat FLRW at every saved point."""
+  _, is_finite, z, d_a = _trace_bundle(metric_fn, 2.3, direction, False)
+  dl = jnp.square(1.0 + z) * d_a
+  in_range = is_finite & (z > 0.01) & (z < 2.3)
+
+  assert int(jnp.sum(in_range)) >= 4
+  expected = z * (1.0 + z) / _HUBBLE
+  assert jnp.allclose(
+    jnp.where(in_range, dl, 1.0),
+    jnp.where(in_range, expected, 1.0),
+    rtol=1e-4,
+  )
+
+
+def test_null_direction_is_null_with_unit_frequency():
+  """
+  The observer's photon is null and has unit frequency for the comoving
+  observer, with lapse, shift and anisotropy all present.
+  """
+  g = jnp.array(
+    [
+      [-1.2, 0.1, -0.05, 0.02],
+      [0.1, 2.0, 0.3, 0.0],
+      [-0.05, 0.3, 0.8, 0.1],
+      [0.02, 0.0, 0.1, 1.4],
+    ]
+  )
+
+  k = make_null_direction(g, jnp.array([0.3, -0.5, 0.8]))
+
+  assert float(jnp.einsum("mn,m,n->", g, k, k)) == pytest.approx(0.0, abs=1e-10)
+  u = comoving_four_velocity(g)
+  assert float(-jnp.einsum("mn,m,n->", g, u, k)) == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(
+  "direction", [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.4, -0.7, 0.6]]
+)
+def test_luminosity_distance_matches_flat_flrw(direction):
+  _assert_flrw_luminosity_distance(_flat_flrw, jnp.array(direction))
+
+
+@pytest.mark.parametrize(
+  "direction", [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [-0.3, 0.5, 0.8]]
+)
+def test_luminosity_distance_ignores_a_linear_change_of_spatial_coordinates(
+  direction,
+):
+  """
+  x = A x' gives the observer an anisotropic, non-diagonal h. The spacetime
+  is the same FLRW universe, so dL(z) is unchanged in every direction.
+  """
+  a_matrix = jnp.array([[1.3, 0.2, 0.0], [0.0, 0.8, 0.1], [0.1, 0.0, 1.1]])
+
+  def transformed(coords):
+    x = a_matrix @ coords[1:4]
+    g = _flat_flrw(jnp.concatenate([coords[:1], x]))
+    return g.at[1:4, 1:4].set(a_matrix.T @ g[1:4, 1:4] @ a_matrix)
+
+  _assert_flrw_luminosity_distance(transformed, jnp.array(direction))
+
+
+@pytest.mark.parametrize("direction", [[1.0, 0.0, 0.0], [-0.6, 0.0, 0.8]])
+def test_luminosity_distance_with_a_shift_from_reslicing(direction):
+  """
+  t = t' - c x keeps every comoving worldline and gives the metric a shift
+  g_0x = c. The redshift and distance between the same observers are
+  unchanged.
+  """
+  c = 0.1
+
+  def resliced(coords):
+    t = coords[0] - c * coords[1]
+    g = _flat_flrw(jnp.concatenate([t[None], coords[1:4]]))
+    g = g.at[0, 1].set(c).at[1, 0].set(c)
+    return g.at[1, 1].add(-(c**2))
+
+  _assert_flrw_luminosity_distance(resliced, jnp.array(direction))

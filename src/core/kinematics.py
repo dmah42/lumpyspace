@@ -27,6 +27,16 @@ class Kinematics(NamedTuple):
   sigma_sq: jnp.ndarray
 
 
+def comoving_four_velocity(g: jnp.ndarray) -> jnp.ndarray:
+  """
+  The 4-velocity u^mu = (1 / sqrt(-g_00), 0, 0, 0) of observers at fixed
+  spatial coordinates. Its covector is g_mu_nu u^nu = g_mu0 / sqrt(-g_00),
+  which carries the shift g_0i.
+  """
+  neg_g00 = jnp.maximum(-g[0, 0], _NEG_G00_FLOOR)
+  return jnp.zeros(4, dtype=g.dtype).at[0].set(1.0 / jnp.sqrt(neg_g00))
+
+
 def comoving_spatial_metric(g: jnp.ndarray) -> jnp.ndarray:
   """
   Spatial metric in the rest frame of observers at fixed spatial coordinates,
